@@ -12,6 +12,27 @@ FTDX101D ── COM14 38400 8N1 ──> vRadio.exe ── TCP 127.0.0.1:4532 ─
 
 Status 10 Nov 2026: everything confirmed on air except the dual RX value (see "Open items").
 
+## Download
+
+Get the latest exes from **[Releases](https://github.com/s55oo/N1MM_vRadio2/releases/latest)**
+(also in the `dist` folder of this repo):
+
+- `vRadio.exe`: console version
+- `vRadioTray.exe`: system tray version
+- `radio_monitor.exe`: read-only CAT monitor for testing
+
+No installation and no Python needed. Put the exes in one folder (for example `C:\Ham\vRadio\dist`)
+and start them with the commands below. Windows SmartScreen may warn about an unsigned exe:
+click *More info → Run anyway*.
+
+Requirements:
+- Windows 10/11
+- Yaesu FTDX101D reachable on a COM port (here COM14 via an ELTIMA virtual port, 38400 8N1)
+- N1MM Logger+
+
+The `vRadio Tray.lnk` shortcut and the `.bat` files use the path `C:\Ham\vRadio\dist`. Edit them
+if you use another folder.
+
 ---
 
 ## 1. Start (the full working command)
@@ -111,6 +132,7 @@ N1MM macro: `{CAT2ASC VRAB;}` copies VFO-A → VFO-B on a key press.
 | `vradio.py` | Source. |
 | `probe_yaesu.py`, `test_client.py`, `test_tcp.py` | Small test tools (Python). |
 | `NOTES_auto_split.md` | Background on auto-split and dual RX. |
+| `CHANGELOG.md` | Release history. |
 
 ## 5. Rebuild the exe
 
@@ -144,3 +166,5 @@ Anything else is answered `?;`. Not mapped: KY (CW text), SH/SL (filters), EX (m
 - Confirm on site that `FR00;` really means dual RX (both sides receiving). The radio accepts and keeps it.
   Check: stop vRadio, run `dist\radio_monitor.bat`, toggle dual RX (Ctrl+Alt+D or radio button), read the
   `FR;` value with dual on, and use it in `--dual-rx-cmd`.
+- Tray version: N1MM radio 2 connected and disconnected repeatedly in one test. Not diagnosed yet;
+  use the console version (`vRadio_TEST.bat`) until then.
