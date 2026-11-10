@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.0.4 - 10 Nov 2026
+
+- **`--split-off-idle`** (ini `split_off_idle = yes`): split is on only while radio 2 transmits.
+  N1MM's CAT `TX;` -> `ST1;` + `TX1;`, `RX;` -> `TX0;` + `ST0;`. After every TX on radio B, split
+  goes off at once and stays off, whatever the N1MM focus. Before this, split stayed on all the time
+  radio 2 had focus, so a radio A message sent just after a focus change could still go out split
+  (seen on air 10 Nov 16:39).
+- The split keeper keeps split off while idle in this mode and never undoes a radio 2 CAT TX.
+- Log warning if radio 2 has focus and the radio is keyed without CAT TX (N1MM PTT via radio
+  command off): that transmission goes out on VFO-A.
+- Tray: `TX focus: ... - split only during TX`.
+
 ## v1.0.3 - 10 Nov 2026
 
 - **Split keeper** (with `--auto-split`): while the radio receives, vRadio checks the TX VFO every

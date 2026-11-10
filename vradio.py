@@ -25,7 +25,7 @@ import serial
 
 log = logging.getLogger("vradio")
 
-__version__ = "1.0.3"
+__version__ = "1.0.4"
 GITHUB_REPO = "s55oo/N1MM_vRadio2"
 
 # vRadioTray.exe is built without a console: then sys.stderr is None and we run in the tray.
@@ -167,6 +167,8 @@ class TS2000Emulator:
         self.udp_listening = False          # N1MM UDP socket bound
         self.udp_last = 0.0                 # time of the last N1MM RadioInfo packet
         self.transmitting = False
+        self.cat_tx = False                 # between CAT TX; and RX; from N1MM radio 2
+        self.split_off_idle = False         # split on only during radio 2's CAT TX
         self.ai = 0
         self.usb_data = usb_data
         self.lsb_data = lsb_data
@@ -219,10 +221,16 @@ class TS2000Emulator:
     def tx_on_other(self):
         self.r.send("ST0;" if self.swap else "ST1;")
 
+    def idle_own(self) -> bool:
+        """Should the radio sit with TX on our VFO while nobody transmits?"""
+        if self.split_off_idle:
+            return False      # split only during radio 2's own CAT TX; off after every TX
+        return bool(self.want_own)
+
     def apply_idle_tx(self, why: str):
-        """Set the TX VFO for the next transmission: our VFO if N1MM's TX focus is on our
-        radio, otherwise the other VFO (split off)."""
-        if self.want_own:
+        """Set the TX VFO for the next transmission. Normally our VFO if N1MM's TX focus is
+        on our radio, otherwise the other VFO (split off). With split_off_idle: always split off."""
+        if self.idle_own():
             self.tx_on_own()
             log.info("%s: TX on VFO-%s (N1MM radio with TX focus)", why, "B" if self.swap else "A")
         else:
@@ -235,18 +243,21 @@ class TS2000Emulator:
             if own == self.want_own:
                 return
             self.want_own = own
-            if not self.transmitting:            # never switch VFO in the middle of a transmission
+            if self.split_off_idle:
+                log.info("N1MM TX focus -> radio %s", "ours" if own else "other")
+            elif not self.transmitting and not self.cat_tx:   # never switch VFO mid-transmission
                 self.apply_idle_tx("N1MM TX focus -> radio %s" % ("ours" if own else "other"))
 
     def tx_vfo_ok(self) -> bool:
-        """Is the radio's TX VFO where N1MM's TX focus says it should be?"""
+        """Is the radio's TX VFO where it should be right now?"""
         tx_sub = self._val("FT;", 2) == "1"
-        want_sub = self.swap if self.want_own else not self.swap
+        own = self.cat_tx or self.idle_own()
+        want_sub = self.swap if own else not self.swap
         return tx_sub == want_sub
 
     def tx_watch_loop(self, stop: threading.Event, interval: float = 0.15):
         """Whatever keyed the radio (CAT, WinKeyer, PTT line, VOX): as soon as it goes from
-        TX back to RX, put TX back where N1MM's focus says (no focus info: split off).
+        TX back to RX, put TX back where it belongs (split_off_idle or no focus info: split off).
         While receiving it also keeps checking the TX VFO and corrects it, so a lost ST
         command or a manual split never survives until the next transmission."""
         fixes, quiet_until = 0, 0.0
@@ -254,14 +265,20 @@ class TS2000Emulator:
             try:
                 with self.lock:
                     is_tx = self._val("TX;", 2) != "0"
+                    known = self.want_own is not None or self.split_off_idle
                     if self.transmitting and not is_tx:
                         self.transmitting = False
+                        self.cat_tx = False
                         self.apply_idle_tx("TX -> RX")
-                    elif is_tx and not self.transmitting and self.want_own is not None:
-                        if not self.tx_vfo_ok():
-                            log.warning("TX started on the wrong VFO (split %s) - keyed before "
-                                        "vRadio could correct it", "on" if not self.want_own else "off")
-                    elif not is_tx and self.want_own is not None and time.time() >= quiet_until:
+                    elif is_tx and not self.transmitting:
+                        if known and not self.tx_vfo_ok():
+                            log.warning("TX started on the wrong VFO - keyed before vRadio could "
+                                        "correct it")
+                        if self.split_off_idle and self.want_own and not self.cat_tx:
+                            log.warning("Radio 2 has TX focus but keyed without CAT TX; it transmits "
+                                        "on VFO-%s. In N1MM enable PTT via radio command for radio 2",
+                                        "A" if self.swap else "B")
+                    elif not is_tx and not self.cat_tx and known and time.time() >= quiet_until:
                         if self.tx_vfo_ok():
                             fixes = 0
                         else:
@@ -428,6 +445,7 @@ class TS2000Emulator:
         # PTT
         if c == "TX":
             if self.auto_split:
+                self.cat_tx = True
                 self.tx_on_own()          # transmit on the VFO this software controls
                 time.sleep(0.05)
             r.send("TX1;")
@@ -435,6 +453,7 @@ class TS2000Emulator:
         if c == "RX":
             r.send("TX0;")
             if self.auto_split:
+                self.cat_tx = False
                 time.sleep(0.05)
                 self.apply_idle_tx("CAT RX")    # focus-aware; no focus info -> split off
             return ""
@@ -799,6 +818,9 @@ def main():
     ap.add_argument("--auto-split", action="store_true",
                     help="CAT TX from this software transmits on our VFO (ST1), RX gives TX back "
                          "to the other VFO (ST0)")
+    ap.add_argument("--split-off-idle", action="store_true",
+                    help="with --auto-split: split on only while radio 2 transmits by CAT TX (N1MM "
+                         "PTT via radio command); off after every TX and while idle, whatever the focus")
     ap.add_argument("--n1mm-udp", type=int, metavar="PORT",
                     help="with --auto-split: follow N1MM TX focus from its RadioInfo UDP broadcast "
                          "(N1MM Configurer > Broadcast Data > Radio, e.g. 12064; avoid 12060-12063, "
@@ -962,6 +984,7 @@ def _run_core(a, stop: threading.Event, state: dict):
 
     emu = TS2000Emulator(radio, usb_data=a.usb_data, lsb_data=a.lsb_data, vfo=a.vfo,
                          auto_split=a.auto_split)
+    emu.split_off_idle = bool(a.auto_split and a.split_off_idle)
     state["emu"] = emu
     log.info("Software VFO-A -> radio VFO-%s", a.vfo.upper())
     if a.auto_split:
@@ -1009,6 +1032,8 @@ def _run_core(a, stop: threading.Event, state: dict):
     if a.auto_split:
         threading.Thread(target=emu.tx_watch_loop, args=(server.stop,), daemon=True).start()
         log.info("TX watcher on: split off as soon as the radio returns to RX")
+        if emu.split_off_idle:
+            log.info("Split off when idle: split on only during radio 2's CAT TX")
         if a.n1mm_udp:
             threading.Thread(target=emu.n1mm_udp_loop,
                              args=(server.stop, a.n1mm_udp, a.n1mm_radio), daemon=True).start()
@@ -1191,6 +1216,8 @@ def status_lines(a, state: dict) -> tuple[list[str], str]:
             f = f"TX focus: radio {a.n1mm_radio} (VFO-{own})"
         else:
             f = f"TX focus: other radio (VFO-{other})"
+        if emu.split_off_idle:
+            f = f.replace(" (split off)", "") + " - split only during TX"
         lines.append(f)
     if emu is not None and emu.udp_error:
         color = "#c0392b"
