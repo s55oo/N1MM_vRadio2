@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.0.2 - 10 Nov 2026
+
+- **Settings file:** `vradio.ini` next to the exe is read at every start. Its keys are the long
+  option names (`n1mm_udp = 12064`, `follow_band = yes`). Command-line options override it.
+- `--config FILE`, `--no-config`, `--write-config [FILE]` (save the given options and exit).
+- `dist\vradio.example.ini`: every setting with its explanation, filled in with the working setup.
+- Tray menu: *Edit settings (vradio.ini)* (creates it from the current options if missing) and
+  *Restart vRadio* (refused while transmitting).
+- Wrong keys or values stop vRadio with a clear message naming the file and the setting.
+- Tray menu shows the N1MM UDP listener: `N1MM UDP 12064: receiving` / `listening, no data yet` /
+  `listening, last data 45 s ago` / `BUSY (used by another program)`.
+
 ## v1.0.1 - 10 Nov 2026
 
 - **N1MM UDP port moved from 12060 to 12064.** 12060-12063 are used by Callbooker, QSOrouter,

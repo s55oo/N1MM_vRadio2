@@ -67,8 +67,10 @@ vRadioTray has no console window; it sits in the system tray (next to the clock)
 | orange | transmitting |
 | grey | starting / connecting |
 
-Right-click menu: radio status, N1MM connection, TX focus, *Copy VFO-A -> VFO-B (same band)*,
-*Open log*, *Open vRadio folder*, *Install update* (only when there is one), *Check for updates*,
+Right-click menu: radio status, N1MM connection, N1MM UDP listener (`receiving` / `listening, last data
+… ago` / `BUSY`), TX focus, *Copy VFO-A -> VFO-B (same band)*,
+*Open log*, *Open vRadio folder*, *Edit settings (vradio.ini)*, *Restart vRadio*,
+*Install update* (only when there is one), *Check for updates*,
 *Exit vRadio*. The log goes to `dist\vradio_log.txt`
 (rotating, max 4 x 2 MB). Only one vRadioTray can run at a time.
 Same options as vRadio.exe; e.g. `vRadioTray.exe COM5 38400 --tcp 4532 ...`.
@@ -81,6 +83,40 @@ C:\Ham\vRadio\dist\vRadio.exe COM5 38400 --tcp 4532 --follow-band --auto-split -
 ```
 
 Stop: close the vRadio window or press Ctrl+C. Only one program can use COM14 at a time.
+
+### Settings file (vradio.ini)
+
+Instead of a long command line, put the options in **`vradio.ini` next to the exe**
+(`dist\vradio.ini`). vRadio reads it at every start. Options given on the command line override
+the file.
+
+```ini
+[vradio]
+radio = COM14
+radio_baud = 38400
+tcp = 4532
+follow_band = yes
+auto_split = yes
+n1mm_udp = 12064
+dual_rx = yes
+dual_rx_cmd = FR00;
+auto_update = yes
+```
+
+With that file in place, `vRadio.exe` or `vRadioTray.exe` with no options does the same as the full
+command above.
+
+- Keys are the long option names: `--n1mm-udp` → `n1mm_udp` (or `n1mm-udp`). On/off options take
+  `yes` / `no`. An empty value means the default. Comments start with `;` or `#`.
+- `dist\vradio.example.ini` lists every setting with its explanation. Copy it to `vradio.ini` and edit.
+- `vRadio.exe ... --write-config` saves the options you give it to `vradio.ini`, then exits.
+  `--write-config FILE` saves them to another file.
+- `--config FILE` uses another file (e.g. one per contest setup). `--no-config` ignores `vradio.ini`.
+- A wrong key or value stops vRadio with a message naming the file and the setting.
+- Tray menu: *Edit settings (vradio.ini)* opens the file in Notepad (it is created from the current
+  options if missing). Then use *Restart vRadio* to apply it.
+- An on/off option set to `yes` in the file can't be turned off on the command line; use `--no-config`
+  or edit the file.
 
 ### Updates
 
@@ -151,6 +187,9 @@ vRadio takes its port exclusively. If another program already has it, the log sa
 | `--update` | Install the latest release now, then exit. |
 | `--no-update-check` | Do not check GitHub for new versions. |
 | `--version` | Show the version. |
+| `--config FILE` | Settings file (default `vradio.ini` next to the exe, if it exists). |
+| `--no-config` | Ignore `vradio.ini`. |
+| `--write-config [FILE]` | Save the given options to `vradio.ini` (or FILE) and exit. |
 
 N1MM macro: `{CAT2ASC VRAB;}` copies VFO-A → VFO-B on a key press.
 
@@ -163,6 +202,7 @@ N1MM macro: `{CAT2ASC VRAB;}` copies VFO-A → VFO-B on a key press.
 | `dist\vRadio.exe` | The translator, console version (no Python needed). |
 | `dist\vRadioTray.exe` | The same, as a system tray app (no console). |
 | `dist\vRadio Tray.lnk` | Shortcut: vRadioTray with the full working options. |
+| `dist\vradio.example.ini` | Every setting with its explanation; copy to `vradio.ini`. |
 | `dist\vRadio_TEST.bat` | Full working setup with debug log. |
 | `dist\vRadio_N1MM_TCP.bat` | Older launcher: TCP + follow-band only (no auto-split). |
 | `dist\radio_monitor.exe` / `.bat` | Read-only monitor of FR/FT/ST/VS/TX/FA/FB/MD; prints every change. Stop vRadio first. |

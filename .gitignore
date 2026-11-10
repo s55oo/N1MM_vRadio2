@@ -8,3 +8,8 @@ build/
 *.spec
 __pycache__/
 dist/new/
+
+# personal settings
+dist/vradio.ini
+*.old
+*.new

@@ -99,6 +99,12 @@ story = [
       "plus <i>Check for updates</i>. Console: " + c("vRadio.exe --update") + ". " + c("--auto-update")
       + " installs at start, before the radio connects (used by the shortcut). The old exe is kept as "
       + c(".old") + " until the next start."),
+    p("<b>Settings file:</b> put the options in " + c("vradio.ini") + " next to the exe, section "
+      + c("[vradio]") + ", keys = long option names (" + c("n1mm_udp = 12064") + ", " + c("follow_band = yes")
+      + "). Command-line options override it. " + c("--write-config") + " saves the given options to it; "
+      + c("--config FILE") + " uses another file; " + c("--no-config") + " ignores it. Every setting is "
+      "explained in " + c(r"dist\vradio.example.ini") + ". Tray: <i>Edit settings</i>, then "
+      "<i>Restart vRadio</i>."),
     p("<b>UDP 12064:</b> 12060-12063 are used by Callbooker, QSOrouter, POUNCer and PingPong; only one "
       "program gets each packet on a port. Add " + c("127.0.0.1:12064") + " to N1MM Broadcast Data &gt; Radio."),
     p("Radio on another port: put the port and speed first, e.g.:"),

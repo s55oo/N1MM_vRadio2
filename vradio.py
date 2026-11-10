@@ -25,7 +25,7 @@ import serial
 
 log = logging.getLogger("vradio")
 
-__version__ = "1.0.1"
+__version__ = "1.0.2"
 GITHUB_REPO = "s55oo/N1MM_vRadio2"
 
 # vRadioTray.exe is built without a console: then sys.stderr is None and we run in the tray.
@@ -164,6 +164,8 @@ class TS2000Emulator:
         self.auto_split = auto_split
         self.want_own: bool | None = None   # N1MM TX focus on our radio? None = unknown
         self.udp_error: str | None = None   # N1MM UDP port busy?
+        self.udp_listening = False          # N1MM UDP socket bound
+        self.udp_last = 0.0                 # time of the last N1MM RadioInfo packet
         self.transmitting = False
         self.ai = 0
         self.usb_data = usb_data
@@ -263,6 +265,7 @@ class TS2000Emulator:
             try:
                 sock.bind(("", port))
                 self.udp_error = None
+                self.udp_listening = True
                 break
             except OSError as e:
                 sock.close()
@@ -279,6 +282,7 @@ class TS2000Emulator:
         while not stop.is_set():
             try:
                 data, _ = sock.recvfrom(16384)
+                self.udp_last = time.time()
             except socket.timeout:
                 continue
             except OSError as e:
@@ -663,6 +667,85 @@ class TcpCatServer:
             srv.close()
 
 
+# ---------------------------------------------------------------------------
+# Settings file (INI)
+# ---------------------------------------------------------------------------
+CONFIG_NAME = "vradio.ini"
+CONFIG_SECTION = "vradio"
+# options that make no sense in a settings file
+NOT_IN_CONFIG = {"help", "version", "port", "baud", "update", "updated", "config", "no_config",
+                 "write_config"}
+
+
+def _argv_value(opt: str) -> str | None:
+    """Value of `opt` on the command line (`--opt X` or `--opt=X`), before argparse runs."""
+    argv = sys.argv[1:]
+    for i, x in enumerate(argv):
+        if x == opt and i + 1 < len(argv):
+            return argv[i + 1]
+        if x.startswith(opt + "="):
+            return x.split("=", 1)[1]
+    return None
+
+
+def _config_actions(ap: argparse.ArgumentParser) -> dict:
+    return {act.dest: act for act in ap._actions
+            if act.option_strings and act.dest not in NOT_IN_CONFIG and act.help != argparse.SUPPRESS}
+
+
+def load_config(ap: argparse.ArgumentParser, path: str) -> dict:
+    """Read [vradio] from an INI file -> argparse defaults (command line still wins)."""
+    import configparser
+    cp = configparser.ConfigParser(inline_comment_prefixes=("#",), interpolation=None)
+    cp.optionxform = lambda k: k.strip().lower().replace("-", "_")
+    with open(path, encoding="utf-8-sig") as f:
+        cp.read_file(f)
+    if not cp.has_section(CONFIG_SECTION):
+        raise ValueError(f"no [{CONFIG_SECTION}] section")
+    acts = _config_actions(ap)
+    out = {}
+    for key, raw in cp.items(CONFIG_SECTION):
+        if key not in acts:
+            raise KeyError(f"unknown setting '{key}' (allowed: {', '.join(sorted(acts))})")
+        act, val = acts[key], raw.strip()
+        if isinstance(act, argparse._StoreTrueAction):
+            if val.lower() not in cp.BOOLEAN_STATES:
+                raise ValueError(f"{key} = {val}: use yes or no")
+            out[key] = cp.BOOLEAN_STATES[val.lower()]
+            continue
+        if val == "":
+            continue                                    # empty = keep the default
+        try:
+            v = act.type(val) if act.type else val
+        except ValueError:
+            raise ValueError(f"{key} = {val}: not a valid value") from None
+        if act.choices and v not in act.choices:
+            raise ValueError(f"{key} = {val}: must be one of {', '.join(map(str, act.choices))}")
+        out[key] = v
+    return out
+
+
+def save_config(ap: argparse.ArgumentParser, a, path: str):
+    """Write the effective options as an INI file with the option help as comments."""
+    import textwrap
+    lines = [f"; vRadio {__version__} settings. Command-line options override these.",
+             "; yes/no for on/off options; leave a value empty for the default.",
+             f"[{CONFIG_SECTION}]"]
+    for dest, act in _config_actions(ap).items():
+        val = getattr(a, dest, None)
+        if dest == "log" and val == os.path.join(APP_DIR, "vradio_log.txt"):
+            val = None                                  # tray default, not a user choice
+        if isinstance(act, argparse._StoreTrueAction):
+            sval = "yes" if val else "no"
+        else:
+            sval = "" if val is None else str(val)
+        lines.append("")
+        lines += ["; " + h for h in textwrap.wrap(f"--{dest.replace('_', '-')}: {act.help}", 96)]
+        lines.append(f"{dest} = {sval}")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+
+
 def main():
     ap = Parser(
         description="Yaesu FTDX101D -> Kenwood TS-2000 CAT translator",
@@ -715,13 +798,43 @@ def main():
     ap.add_argument("--no-update-check", action="store_true",
                     help="do not check GitHub for new versions")
     ap.add_argument("--updated", action="store_true", help=argparse.SUPPRESS)
+    ap.add_argument("--config", metavar="FILE",
+                    help=f"settings file (default: {CONFIG_NAME} next to the exe, if it exists); "
+                         "command-line options override it")
+    ap.add_argument("--no-config", action="store_true", help=f"ignore {CONFIG_NAME}")
+    ap.add_argument("--write-config", nargs="?", const="", metavar="FILE",
+                    help=f"write the current options to FILE (default {CONFIG_NAME} next to the exe) "
+                         "and exit")
     ap.add_argument("--version", action="version", version=f"vRadio {__version__}")
-    a = ap.parse_args()
 
+    cfg_file, cfg_err = None, None
+    if "--no-config" not in sys.argv:
+        cfg_file = _argv_value("--config") or os.path.join(APP_DIR, CONFIG_NAME)
+        if os.path.exists(cfg_file):
+            try:
+                ap.set_defaults(**load_config(ap, cfg_file))
+            except (ValueError, KeyError) as e:
+                ap.error(f"{cfg_file}: {e}")
+        else:
+            if _argv_value("--config"):
+                cfg_err = f"settings file not found: {cfg_file}"
+            cfg_file = None
+    a = ap.parse_args()
+    if cfg_err:
+        ap.error(cfg_err)
+    a.config_file = cfg_file
     if a.port:
         a.radio = a.port.upper()
     if a.baud:
         a.radio_baud = a.baud
+
+    if a.write_config is not None:
+        path = a.write_config or os.path.join(APP_DIR, CONFIG_NAME)
+        save_config(ap, a, path)
+        msg = f"Settings written to {path}"
+        message_box(msg) if WINDOWED else print(msg)
+        return
+
     a.dual_rx_cmd = a.dual_rx_cmd.strip().upper().rstrip(";") + ";"
     tray = a.tray or WINDOWED
     if tray and not a.log:
@@ -734,10 +847,10 @@ def main():
     logging.basicConfig(level=logging.DEBUG if a.verbose else logging.INFO, handlers=handlers,
                         format="%(asctime)s %(levelname)-7s %(message)s", datefmt="%H:%M:%S")
 
-    log.info("vRadio %s", __version__)
+    log.info("vRadio %s%s", __version__, f" - settings from {a.config_file}" if a.config_file else "")
     cleanup_old_exe()
     state = {"radio": None, "emu": None, "server": None, "error": None, "args": a,
-             "update": None, "relaunch": None}
+             "update": None, "relaunch": None, "parser": ap}
     stop = threading.Event()
 
     if a.update or (a.auto_update and not a.updated):     # --updated: just restarted, no loop
@@ -1028,6 +1141,24 @@ def status_lines(a, state: dict) -> tuple[list[str], str]:
     else:
         cat = "CAT: starting"
     lines = [r, cat]
+    if a.auto_split and a.n1mm_udp:
+        if emu is None:
+            u = "starting"
+        elif emu.udp_error:
+            u = "BUSY (used by another program)"
+        elif not emu.udp_listening:
+            u = "starting"
+        elif not emu.udp_last:
+            u = "listening, no data yet"
+        else:
+            ago = time.time() - emu.udp_last
+            if ago < 10:
+                u = "receiving"
+            elif ago < 120:
+                u = f"listening, last data {int(ago)} s ago"
+            else:
+                u = f"listening, last data {int(ago // 60)} min ago"
+        lines.append(f"N1MM UDP {a.n1mm_udp}: {u}")
     if emu is not None and emu.auto_split:
         own = "B" if emu.swap else "A"
         other = "A" if emu.swap else "B"
@@ -1039,7 +1170,6 @@ def status_lines(a, state: dict) -> tuple[list[str], str]:
             f = f"TX focus: other radio (VFO-{other})"
         lines.append(f)
     if emu is not None and emu.udp_error:
-        lines.append(f"{emu.udp_error} - TX focus not followed")
         color = "#c0392b"
     if state.get("update"):
         lines.append(f"Update {state['update']['version']} available")
@@ -1128,6 +1258,31 @@ def run_tray(a, stop: threading.Event, state: dict):
                 notify(f"vRadio {__version__} is the latest version.")
         threading.Thread(target=work, daemon=True).start()
 
+    def edit_settings(icon, item):
+        path = a.config_file or os.path.join(APP_DIR, CONFIG_NAME)
+        try:
+            if not os.path.exists(path):
+                save_config(state["parser"], a, path)
+                log.info("Wrote %s from the current options", path)
+                notify(f"Created {CONFIG_NAME} from the current options. "
+                       "Save it, then use Restart vRadio.")
+            os.startfile(path)
+        except OSError as e:
+            notify(f"Cannot open {path}: {e}")
+
+    def restart(icon, item):
+        emu = state["emu"]
+        if emu is not None and emu.transmitting:
+            notify("Not now - the radio is transmitting.")
+            return
+        if not getattr(sys, "frozen", False):
+            notify("Restart works only for the exe.")
+            return
+        log.info("Restart from tray menu")
+        state["relaunch"] = sys.executable
+        stop.set()
+        icon.stop()
+
     def update_label(item):
         info = state.get("update")
         return f"Install update {info['version']} (restarts vRadio)" if info else "Install update"
@@ -1145,6 +1300,8 @@ def run_tray(a, stop: threading.Event, state: dict):
         pystray.MenuItem(f"Copy VFO-{other} -> VFO-{own} (same band)", copy_ab),
         pystray.MenuItem("Open log", open_log),
         pystray.MenuItem("Open vRadio folder", open_folder),
+        pystray.MenuItem(f"Edit settings ({CONFIG_NAME})", edit_settings),
+        pystray.MenuItem("Restart vRadio", restart),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem(update_label, do_update, visible=lambda item: bool(state.get("update"))),
         pystray.MenuItem(f"Check for updates (v{__version__})", check_now),
