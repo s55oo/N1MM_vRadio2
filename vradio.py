@@ -25,7 +25,7 @@ import serial
 
 log = logging.getLogger("vradio")
 
-__version__ = "1.0.4"
+__version__ = "1.0.5"
 GITHUB_REPO = "s55oo/N1MM_vRadio2"
 
 # vRadioTray.exe is built without a console: then sys.stderr is None and we run in the tray.
@@ -710,9 +710,203 @@ class TcpCatServer:
 
 
 # ---------------------------------------------------------------------------
+# DJ controller jog wheel (MIDI) -> tune our VFO (radio 2)
+# Uses Windows winmm directly, no extra Python packages.
+# ---------------------------------------------------------------------------
+class MidiIn:
+    """Minimal Windows MIDI input: open a device by (part of) its name, queue (status, d1, d2)."""
+    MIM_DATA = 0x3C3
+    CALLBACK_FUNCTION = 0x30000
+
+    def __init__(self):
+        import ctypes
+        from ctypes import wintypes
+        self.ct = ctypes
+        self.mm = ctypes.windll.winmm
+
+        class CAPS(ctypes.Structure):
+            _fields_ = [("wMid", wintypes.WORD), ("wPid", wintypes.WORD),
+                        ("vDriverVersion", wintypes.UINT), ("szPname", wintypes.WCHAR * 32),
+                        ("dwSupport", wintypes.DWORD)]
+        self.CAPS = CAPS
+        self.PROC = ctypes.WINFUNCTYPE(None, ctypes.c_void_p, ctypes.c_uint, ctypes.c_size_t,
+                                       ctypes.c_size_t, ctypes.c_size_t)
+        self.handle = None
+        self.name = None
+        self.events = None
+        self._cb = None
+
+    def devices(self) -> list[str]:
+        out = []
+        for i in range(self.mm.midiInGetNumDevs()):
+            caps = self.CAPS()
+            if self.mm.midiInGetDevCapsW(i, self.ct.byref(caps), self.ct.sizeof(caps)) == 0:
+                out.append(caps.szPname)
+        return out
+
+    def open(self, want: str, events) -> bool:
+        """Open the first MIDI input whose name contains `want` (case-insensitive)."""
+        for i, name in enumerate(self.devices()):
+            if want.lower() in name.lower():
+                def cb(h, msg, inst, p1, p2):
+                    if msg == self.MIM_DATA:
+                        events.put((p1 & 0xFF, (p1 >> 8) & 0x7F, (p1 >> 16) & 0x7F))
+                self._cb = self.PROC(cb)
+                h = self.ct.c_void_p()
+                if self.mm.midiInOpen(self.ct.byref(h), i, self._cb, 0, self.CALLBACK_FUNCTION) != 0:
+                    raise OSError(f"MIDI device '{name}' is in use by another program")
+                self.mm.midiInStart(h)
+                self.handle, self.name = h, name
+                return True
+        return False
+
+    def close(self):
+        if self.handle is not None:
+            try:
+                self.mm.midiInStop(self.handle)
+                self.mm.midiInReset(self.handle)
+                self.mm.midiInClose(self.handle)
+            except OSError:
+                pass
+        self.handle, self.name = None, None
+
+
+def jog_delta(v: int) -> int:
+    """Relative jog value: 1..63 = clockwise steps, 65..127 = counter-clockwise (127 = -1)."""
+    return v if v < 64 else v - 128
+
+
+def parse_cc_list(s: str | None) -> set[int]:
+    """'48,49' or '0x30,0x31' -> {48, 49}; empty -> set() = any controller."""
+    out = set()
+    for x in (s or "").replace(";", ",").split(","):
+        x = x.strip()
+        if x:
+            out.add(int(x, 0))
+    return out
+
+
+class JogTuner:
+    """Turns jog wheel ticks into frequency changes on the VFO vRadio controls."""
+
+    def __init__(self, emu: "TS2000Emulator", step: int = 10, ccs: set[int] | None = None,
+                 accel: bool = True, learn: bool = False):
+        import queue
+        self.emu, self.step, self.ccs, self.accel, self.learn = emu, step, ccs or set(), accel, learn
+        self.events = queue.Queue()
+        self.device: str | None = None     # connected MIDI device name
+        self.error: str | None = None
+        self.last_move = 0.0
+        self.freq: int | None = None        # cached frequency while turning
+
+    def ticks_from(self, status: int, d1: int, d2: int) -> int:
+        if self.learn:
+            log.info("MIDI %02X %02X %02X  (status, controller/note, value)", status, d1, d2)
+        if status & 0xF0 != 0xB0:            # control change only
+            return 0
+        if self.ccs and d1 not in self.ccs:
+            return 0
+        if not self.ccs and d2 in (0, 64):     # absolute knobs/faders rest at 0/64: ignore
+            return 0
+        return jog_delta(d2)
+
+    def multiplier(self, ticks: int) -> int:
+        """Fast spin = bigger steps. `ticks` is the sum over one 40 ms batch."""
+        if not self.accel:
+            return 1
+        n = abs(ticks)
+        return 1 if n < 5 else 2 if n < 10 else 5
+
+    def apply(self, ticks: int):
+        """Move our VFO by ticks * step (never while transmitting)."""
+        emu = self.emu
+        if not ticks or emu.transmitting or emu.cat_tx:
+            return
+        y = emu.ymap["A"]                    # radio VFO letter vRadio controls (B = SUB)
+        with emu.lock:
+            now = time.time()
+            if self.freq is None or now - self.last_move > 1.0:
+                self.freq = int(emu._val(f"F{y};", 2))     # re-read after a pause (knob/N1MM moved it)
+            f = self.freq + ticks * self.step * self.multiplier(ticks)
+            f = max(30_000, min(f, 75_000_000))
+            f -= f % self.step                              # stay on the step grid
+            emu.r.send(f"F{y}{f:09d};")
+            self.freq, self.last_move = f, now
+        log.debug("Jog %+d -> VFO-%s %d Hz", ticks, y, f)
+
+    def skip_connect_dump(self, stop: threading.Event, wait: float = 6.0):
+        """About 4 s after opening, the MP3 e2 reports every fader position (CC 0x34-0x3C) and
+        then one jog value. That is not the operator turning the wheel: wait for it and drop it."""
+        import queue
+        end = time.time() + wait
+        while time.time() < end and not stop.is_set():
+            try:
+                s, d1, d2 = self.events.get(timeout=0.2)
+            except queue.Empty:
+                continue
+            if s & 0xF0 == 0xB0 and 0x34 <= d1 <= 0x3C:          # faders/knobs: the dump started
+                end = min(end, time.time() + 0.3)
+        while not self.events.empty():
+            self.events.get_nowait()
+
+    def run(self, stop: threading.Event, want: str):
+        import queue
+        midi = None
+        next_try = 0.0
+        while not stop.is_set():
+            if midi is None or midi.handle is None:
+                if time.time() >= next_try:
+                    next_try = time.time() + 5
+                    try:
+                        midi = midi or MidiIn()
+                        if midi.open(want, self.events):
+                            self.skip_connect_dump(stop)
+                            self.device, self.error = midi.name, None
+                            log.info("DJ wheel: '%s' connected - jog tunes VFO-%s, %d Hz per step",
+                                     midi.name, self.emu.ymap["A"], self.step)
+                        elif self.error != "not found":
+                            self.error = "not found"
+                            log.warning("DJ wheel: no MIDI device matching '%s' (found: %s) - "
+                                        "is the driver installed? Retrying every 5 s", want,
+                                        ", ".join(midi.devices()) or "none")
+                    except OSError as e:
+                        if self.error != str(e):
+                            log.warning("DJ wheel: %s", e)
+                        self.error = str(e)
+                stop.wait(0.5)
+                continue
+            # still plugged in?
+            if time.time() >= next_try:
+                next_try = time.time() + 5
+                if not any(midi.name == n for n in midi.devices()):
+                    log.warning("DJ wheel: '%s' disconnected", midi.name)
+                    midi.close()
+                    self.device, self.error = None, "disconnected"
+                    continue
+            try:
+                ev = self.events.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            ticks = self.ticks_from(*ev)
+            end = time.time() + 0.04                         # gather a short batch
+            while time.time() < end:
+                try:
+                    ticks += self.ticks_from(*self.events.get(timeout=max(0.0, end - time.time())))
+                except queue.Empty:
+                    break
+            try:
+                self.apply(ticks)
+            except (RadioError, ValueError) as e:
+                log.debug("jog: %s", e)
+        if midi:
+            midi.close()
+
+# ---------------------------------------------------------------------------
 # Settings file (INI)
 # ---------------------------------------------------------------------------
-CONFIG_NAME = "vradio.ini"
+# vRadioDJ.exe = the same program with the DJ wheel on by default and its own settings file
+IS_DJ = os.path.basename(sys.executable if getattr(sys, "frozen", False) else "").lower().startswith("vradiodj")
+CONFIG_NAME = "vradiodj.ini" if IS_DJ else "vradio.ini"
 CONFIG_SECTION = "vradio"
 # options that make no sense in a settings file
 NOT_IN_CONFIG = {"help", "version", "port", "baud", "update", "updated", "config", "no_config",
@@ -831,6 +1025,17 @@ def main():
                     help="keep dual receive (MAIN + SUB) on all the time")
     ap.add_argument("--dual-rx-cmd", default="FR00;",
                     help="radio command for dual receive (default FR00; - verify on site)")
+    ap.add_argument("--midi", metavar="NAME", default="MP3" if IS_DJ else None,
+                    help="DJ controller jog wheel tunes our VFO (radio 2): MIDI input whose name "
+                         "contains NAME, e.g. MP3 for Hercules DJ Control MP3 e2")
+    ap.add_argument("--midi-step", type=int, default=10,
+                    help="Hz per jog wheel step (default 10; faster spinning = 3x / 10x)")
+    ap.add_argument("--midi-cc", metavar="LIST", default="48",
+                    help="MIDI controller numbers that tune (default 48 = MP3 e2 left jog wheel; "
+                         "49 = right jog wheel, 48,49 = both; find others with --midi-learn)")
+    ap.add_argument("--midi-no-accel", action="store_true", help="fixed step size, no acceleration")
+    ap.add_argument("--midi-learn", action="store_true",
+                    help="log every MIDI message (to find the wheel's controller number)")
     ap.add_argument("--poll", type=float, default=0.3, help="AI auto-info poll interval, seconds")
     ap.add_argument("-v", "--verbose", action="store_true", help="log every command")
     ap.add_argument("--log", metavar="FILE", help="also write the log to this file")
@@ -1039,6 +1244,11 @@ def _run_core(a, stop: threading.Event, state: dict):
                              args=(server.stop, a.n1mm_udp, a.n1mm_radio), daemon=True).start()
     elif a.n1mm_udp:
         log.warning("--n1mm-udp needs --auto-split; ignored")
+    if a.midi:
+        jog = JogTuner(emu, step=max(1, a.midi_step), ccs=parse_cc_list(a.midi_cc),
+                       accel=not a.midi_no_accel, learn=a.midi_learn)
+        state["jog"] = jog
+        threading.Thread(target=jog.run, args=(server.stop, a.midi), daemon=True).start()
     server.run()
 
 
@@ -1221,6 +1431,14 @@ def status_lines(a, state: dict) -> tuple[list[str], str]:
         lines.append(f)
     if emu is not None and emu.udp_error:
         color = "#c0392b"
+    jog = state.get("jog")
+    if getattr(a, "midi", None):
+        if jog is None:
+            lines.append("DJ wheel: starting")
+        elif jog.device:
+            lines.append(f"DJ wheel: {jog.device} ({jog.step} Hz/step)")
+        else:
+            lines.append(f"DJ wheel '{getattr(a, "midi", "")}': {jog.error or 'searching'}")
     if state.get("update"):
         lines.append(f"Update {state['update']['version']} available")
     if emu is not None and emu.transmitting and radio and radio.ok:
@@ -1240,7 +1458,7 @@ def run_tray(a, stop: threading.Event, state: dict):
         return icons[color]
 
     def line(i):
-        return lambda item: (status_lines(a, state)[0] + [""] * 6)[i]
+        return lambda item: (status_lines(a, state)[0] + [""] * 8)[i]
 
     def visible(i):
         return lambda item: len(status_lines(a, state)[0]) > i
@@ -1346,6 +1564,8 @@ def run_tray(a, stop: threading.Event, state: dict):
         pystray.MenuItem(line(3), None, enabled=False, visible=visible(3)),
         pystray.MenuItem(line(4), None, enabled=False, visible=visible(4)),
         pystray.MenuItem(line(5), None, enabled=False, visible=visible(5)),
+        pystray.MenuItem(line(6), None, enabled=False, visible=visible(6)),
+        pystray.MenuItem(line(7), None, enabled=False, visible=visible(7)),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem(f"Copy VFO-{other} -> VFO-{own} (same band)", copy_ab),
         pystray.MenuItem("Open log", open_log),

@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.0.5 - 10 Nov 2026
+
+- **DJ controller jog wheel tunes radio 2** (VFO-B). `vRadioDJ.exe` is vRadio with the wheel on and
+  its own settings file `vradiodj.ini`; `vRadioTray.exe` works as before.
+- Made for the Hercules DJ Control MP3 e2 (Hercules driver needed). Left jog wheel = CC 48
+  (`midi_cc = 48`; 49 = right wheel, `48,49` = both). 10 Hz per step, faster spinning 2x / 5x.
+- No tuning while transmitting. The controller's position dump about 4 s after connecting is
+  ignored. If it's unplugged, vRadio reconnects by itself.
+- Options: `--midi NAME`, `--midi-cc`, `--midi-step`, `--midi-no-accel`, `--midi-learn` (logs every
+  MIDI message). Windows winmm is used directly, no extra packages.
+- Tray: `DJ wheel: DJ Control MP3 e2 MIDI (10 Hz/step)`.
+
 ## v1.0.4 - 10 Nov 2026
 
 - **`--split-off-idle`** (ini `split_off_idle = yes`): split is on only while radio 2 transmits.
