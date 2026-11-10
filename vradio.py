@@ -25,7 +25,7 @@ import serial
 
 log = logging.getLogger("vradio")
 
-__version__ = "1.0.2"
+__version__ = "1.0.3"
 GITHUB_REPO = "s55oo/N1MM_vRadio2"
 
 # vRadioTray.exe is built without a console: then sys.stderr is None and we run in the tray.
@@ -238,9 +238,18 @@ class TS2000Emulator:
             if not self.transmitting:            # never switch VFO in the middle of a transmission
                 self.apply_idle_tx("N1MM TX focus -> radio %s" % ("ours" if own else "other"))
 
+    def tx_vfo_ok(self) -> bool:
+        """Is the radio's TX VFO where N1MM's TX focus says it should be?"""
+        tx_sub = self._val("FT;", 2) == "1"
+        want_sub = self.swap if self.want_own else not self.swap
+        return tx_sub == want_sub
+
     def tx_watch_loop(self, stop: threading.Event, interval: float = 0.15):
         """Whatever keyed the radio (CAT, WinKeyer, PTT line, VOX): as soon as it goes from
-        TX back to RX, put TX back where N1MM's focus says (no focus info: split off)."""
+        TX back to RX, put TX back where N1MM's focus says (no focus info: split off).
+        While receiving it also keeps checking the TX VFO and corrects it, so a lost ST
+        command or a manual split never survives until the next transmission."""
+        fixes, quiet_until = 0, 0.0
         while not stop.is_set():
             try:
                 with self.lock:
@@ -248,6 +257,20 @@ class TS2000Emulator:
                     if self.transmitting and not is_tx:
                         self.transmitting = False
                         self.apply_idle_tx("TX -> RX")
+                    elif is_tx and not self.transmitting and self.want_own is not None:
+                        if not self.tx_vfo_ok():
+                            log.warning("TX started on the wrong VFO (split %s) - keyed before "
+                                        "vRadio could correct it", "on" if not self.want_own else "off")
+                    elif not is_tx and self.want_own is not None and time.time() >= quiet_until:
+                        if self.tx_vfo_ok():
+                            fixes = 0
+                        else:
+                            fixes += 1
+                            if fixes <= 3:
+                                self.apply_idle_tx("Split keeper (TX VFO was wrong)")
+                            else:       # the radio refuses ST: don't flood it, look again in 5 s
+                                log.warning("TX VFO stays wrong after 3 corrections, retrying in 5 s")
+                                fixes, quiet_until = 0, time.time() + 5
                     self.transmitting = is_tx
             except (RadioError, ValueError) as e:
                 log.debug("tx-watch: %s", e)

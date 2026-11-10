@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.0.3 - 10 Nov 2026
+
+- **Split keeper** (with `--auto-split`): while the radio receives, vRadio checks the TX VFO every
+  0.15 s and puts it back where N1MM's TX focus says. Example: focus on radio A but split still on
+  -> `ST0;` before your next message goes out. Before this, a lost `ST` command or a split switched
+  on by hand stayed on until the next TX -> RX.
+- It never switches during a transmission. If something keys the radio on the wrong VFO anyway, the
+  log says `TX started on the wrong VFO`.
+- If the radio refuses the change 3 times, vRadio waits 5 s before trying again, so the radio is
+  not flooded with commands.
+
 ## v1.0.2 - 10 Nov 2026
 
 - **Settings file:** `vradio.ini` next to the exe is read at every start. Its keys are the long
