@@ -1,0 +1,5 @@
+*.pdf binary
+*.exe binary
+*.ico binary
+*.lnk binary
+*.bat text eol=crlf

@@ -1,0 +1,10 @@
+# logs
+*.log
+vradio_log.txt*
+vradio_test_log.txt*
+
+# build output
+build/
+*.spec
+__pycache__/
+dist/new/
