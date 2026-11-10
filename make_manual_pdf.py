@@ -54,14 +54,14 @@ def c(t):  # inline code
     return f'<font name="Courier">{t}</font>'
 
 
-FULL = (r"C:\Ham\vRadio\dist\vRadio.exe --tcp 4532 --follow-band --auto-split --n1mm-udp 12060" "\n"
+FULL = (r"C:\Ham\vRadio\dist\vRadio.exe --tcp 4532 --follow-band --auto-split --n1mm-udp 12064" "\n"
         r"    --dual-rx --dual-rx-cmd FR00; -v --log C:\Ham\vRadio\dist\vradio_test_log.txt")
-NORMAL = (r"C:\Ham\vRadio\dist\vRadio.exe --tcp 4532 --follow-band --auto-split --n1mm-udp 12060" "\n"
+NORMAL = (r"C:\Ham\vRadio\dist\vRadio.exe --tcp 4532 --follow-band --auto-split --n1mm-udp 12064" "\n"
           r"    --dual-rx --dual-rx-cmd FR00;")
-NODUAL = r"C:\Ham\vRadio\dist\vRadio.exe --tcp 4532 --follow-band --auto-split --n1mm-udp 12060"
+NODUAL = r"C:\Ham\vRadio\dist\vRadio.exe --tcp 4532 --follow-band --auto-split --n1mm-udp 12064"
 DIAGRAM = """FTDX101D --- COM14 38400 8N1 ---> vRadio.exe --- TCP 127.0.0.1:4532 ---> N1MM radio 2 (TS-2000)
                                       ^
-                                      +--- UDP 12060 <--- N1MM RadioInfo broadcast (TX focus)"""
+                                      +--- UDP 12064 <--- N1MM RadioInfo broadcast (TX focus)"""
 
 story = [
     p("vRadio", H1),
@@ -94,15 +94,22 @@ story = [
     p("Right-click menu: radio status, N1MM connection, TX focus, <i>Copy VFO-A -&gt; VFO-B (same band)</i>, "
       "<i>Open log</i>, <i>Open vRadio folder</i>, <i>Exit vRadio</i>. Log: " + c(r"dist\vradio_log.txt")
       + " (rotating, max 4 x 2 MB). Only one vRadioTray can run at a time. Same options as vRadio.exe."),
+    p("<b>Updates:</b> vRadio checks GitHub Releases at start and every 6 h. Tray: a notification and "
+      "<i>Install update</i> in the menu (restarts with the same options, refused while transmitting), "
+      "plus <i>Check for updates</i>. Console: " + c("vRadio.exe --update") + ". " + c("--auto-update")
+      + " installs at start, before the radio connects (used by the shortcut). The old exe is kept as "
+      + c(".old") + " until the next start."),
+    p("<b>UDP 12064:</b> 12060-12063 are used by Callbooker, QSOrouter, POUNCer and PingPong; only one "
+      "program gets each packet on a port. Add " + c("127.0.0.1:12064") + " to N1MM Broadcast Data &gt; Radio."),
     p("Radio on another port: put the port and speed first, e.g.:"),
-    code(r"C:\Ham\vRadio\dist\vRadio.exe COM5 38400 --tcp 4532 --follow-band --auto-split --n1mm-udp 12060"),
+    code(r"C:\Ham\vRadio\dist\vRadio.exe COM5 38400 --tcp 4532 --follow-band --auto-split --n1mm-udp 12064"),
     p("Stop: close the vRadio window or press Ctrl+C. Only one program can use COM14 at a time."),
 
     p("2. N1MM setup", H2),
     table([["Where", "Setting"],
            ["Configurer > Hardware, radio 2", "Port <b>TCP</b>, Radio <b>Kenwood TS-2000</b>, "
                                               "IP <b>127.0.0.1</b>, port <b>4532</b>"],
-           ["Configurer > Broadcast Data", "<b>Radio</b> ticked, address <b>127.0.0.1:12060</b> "
+           ["Configurer > Broadcast Data", "<b>Radio</b> ticked, address <b>127.0.0.1:12064</b> "
                                            "(vRadio reads the TX focus from it)"]],
           [55 * mm, 115 * mm]),
 
@@ -140,7 +147,7 @@ story = [
            [c("--same-band"), "Copy VFO-A to VFO-B once at startup."],
            [c("--auto-split"), "vRadio sets the TX VFO itself (" + c("ST1;") + " = VFO-B, " + c("ST0;")
                                + " = VFO-A). CAT " + c("TX;") + " from radio 2 transmits on VFO-B."],
-           [c("--n1mm-udp 12060"), "With --auto-split: follow N1MM TX focus from the RadioInfo broadcast."],
+           [c("--n1mm-udp 12064"), "With --auto-split: follow N1MM TX focus from the RadioInfo broadcast."],
            [c("--n1mm-radio 2"), "Which N1MM radio number vRadio is (default 2)."],
            [c("--dual-rx"), "Keep dual receive on."],
            [c("--dual-rx-cmd FR00;"), "Command for dual receive (default FR00;, verify on site)."],
@@ -192,7 +199,7 @@ story = [
                                                   "Start the program that links COM14 to the radio; check the "
                                                   "radio is on."],
            ["\"Can not set both radios to the same band!\"", "Use --follow-band or the VRAB macro."],
-           ["TX on the wrong VFO", "Check N1MM Broadcast Data > Radio > 127.0.0.1:12060 and look for "
+           ["TX on the wrong VFO", "Check N1MM Broadcast Data > Radio > 127.0.0.1:12064 and look for "
                                    "\"N1MM TX focus\" lines in the log."]],
           [55 * mm, 115 * mm]),
     Spacer(1, 6),

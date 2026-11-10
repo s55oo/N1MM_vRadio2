@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.0.1 - 10 Nov 2026
+
+- **N1MM UDP port moved from 12060 to 12064.** 12060-12063 are used by Callbooker, QSOrouter,
+  POUNCer and PingPong, and on Windows only one of them gets each packet. In N1MM add
+  `127.0.0.1:12064` to Broadcast Data → Radio.
+- The UDP port is taken exclusively (no more `SO_REUSEADDR`). A busy port is reported in the log and
+  in the tray (red, `UDP 12064 busy`) instead of failing silently. vRadio retries every 5 s.
+- **Auto-updater** from GitHub Releases:
+  - tray: notification plus *Install update* / *Check for updates* menu items; restarts with the same options
+  - `--update`, `--auto-update` (at start only), `--no-update-check`, `--version`
+  - the previous exe is kept as `.old` until the next start
+- The tray shortcut and `vRadio_TEST.bat` use `--n1mm-udp 12064 --auto-update`.
+
 ## v1.0.0 - 10 Nov 2026
 
 First release. Tested on air with an FTDX101D and N1MM Logger+.

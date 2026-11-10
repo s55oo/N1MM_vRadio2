@@ -1,11 +1,11 @@
 # Auto split and dual RX - status 10 Nov 2026
 
 ## Working on air
-    vRadio.exe --tcp 4532 --follow-band --auto-split --n1mm-udp 12060 --dual-rx --dual-rx-cmd FR00;
+    vRadio.exe --tcp 4532 --follow-band --auto-split --n1mm-udp 12064 --dual-rx --dual-rx-cmd FR00;
 (= dist\vRadio_TEST.bat, which also logs with -v to vradio_test_log.txt)
 
 - N1MM radio 2 = radio VFO-B (SUB) on TCP 4532, as Kenwood TS-2000.
-- TX VFO follows N1MM TX focus (`ActiveRadioNr` in the RadioInfo UDP broadcast on 12060):
+- TX VFO follows N1MM TX focus (`ActiveRadioNr` in the RadioInfo UDP broadcast on 12064):
   radio 2 -> `ST1;` (TX VFO-B), radio 1 -> `ST0;` (TX VFO-A). Works with WinKeyer CW too.
 - A focus change during TX waits until the radio is back on RX.
 - N1MM sees radio 2 as a plain, non-split radio.

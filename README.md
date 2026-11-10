@@ -7,7 +7,7 @@ N1MM radio 1 stays on its own connection to the radio's VFO-A (MAIN).
 ```
 FTDX101D ── COM14 38400 8N1 ──> vRadio.exe ── TCP 127.0.0.1:4532 ──> N1MM radio 2 (TS-2000)
                                     ^
-                                    └── UDP 12060 <── N1MM RadioInfo broadcast (TX focus)
+                                    └── UDP 12064 <── N1MM RadioInfo broadcast (TX focus)
 ```
 
 Status 10 Nov 2026: everything confirmed on air except the dual RX value (see "Open items").
@@ -40,19 +40,19 @@ if you use another folder.
 Double-click `dist\vRadio_TEST.bat`, or run:
 
 ```
-C:\Ham\vRadio\dist\vRadio.exe --tcp 4532 --follow-band --auto-split --n1mm-udp 12060 --dual-rx --dual-rx-cmd FR00; -v --log C:\Ham\vRadio\dist\vradio_test_log.txt
+C:\Ham\vRadio\dist\vRadio.exe --tcp 4532 --follow-band --auto-split --n1mm-udp 12064 --dual-rx --dual-rx-cmd FR00; -v --log C:\Ham\vRadio\dist\vradio_test_log.txt
 ```
 
 Without the debug log (normal use):
 
 ```
-C:\Ham\vRadio\dist\vRadio.exe --tcp 4532 --follow-band --auto-split --n1mm-udp 12060 --dual-rx --dual-rx-cmd FR00;
+C:\Ham\vRadio\dist\vRadio.exe --tcp 4532 --follow-band --auto-split --n1mm-udp 12064 --dual-rx --dual-rx-cmd FR00;
 ```
 
 Without dual RX (if FR00; turns out to be wrong):
 
 ```
-C:\Ham\vRadio\dist\vRadio.exe --tcp 4532 --follow-band --auto-split --n1mm-udp 12060
+C:\Ham\vRadio\dist\vRadio.exe --tcp 4532 --follow-band --auto-split --n1mm-udp 12064
 ```
 
 ### System tray version
@@ -68,7 +68,8 @@ vRadioTray has no console window; it sits in the system tray (next to the clock)
 | grey | starting / connecting |
 
 Right-click menu: radio status, N1MM connection, TX focus, *Copy VFO-A -> VFO-B (same band)*,
-*Open log*, *Open vRadio folder*, *Exit vRadio*. The log goes to `dist\vradio_log.txt`
+*Open log*, *Open vRadio folder*, *Install update* (only when there is one), *Check for updates*,
+*Exit vRadio*. The log goes to `dist\vradio_log.txt`
 (rotating, max 4 x 2 MB). Only one vRadioTray can run at a time.
 Same options as vRadio.exe; e.g. `vRadioTray.exe COM5 38400 --tcp 4532 ...`.
 Start with Windows: copy `vRadio Tray.lnk` into the Startup folder (Win+R, `shell:startup`).
@@ -76,10 +77,27 @@ Start with Windows: copy `vRadio Tray.lnk` into the Startup folder (Win+R, `shel
 Radio on another port: put the port and speed first, e.g.
 
 ```
-C:\Ham\vRadio\dist\vRadio.exe COM5 38400 --tcp 4532 --follow-band --auto-split --n1mm-udp 12060
+C:\Ham\vRadio\dist\vRadio.exe COM5 38400 --tcp 4532 --follow-band --auto-split --n1mm-udp 12064
 ```
 
 Stop: close the vRadio window or press Ctrl+C. Only one program can use COM14 at a time.
+
+### Updates
+
+vRadio checks GitHub Releases at start and every 6 hours. It never updates in the middle of
+operating by itself:
+
+- **Tray:** a notification appears, and the menu gets *Install update vX (restarts vRadio)*. A click
+  downloads the new exe, closes COM14, and restarts vRadio with the same options. It is refused while
+  transmitting. You can also use *Check for updates*.
+- **Console:** the log says `vRadio vX is available`. Run `vRadio.exe --update`, then start it again.
+- **`--auto-update`:** installs a newer version at start, before connecting to the radio, and restarts
+  with it. The tray shortcut and `vRadio_TEST.bat` use this.
+- `--no-update-check` turns the check off. `--version` shows the version.
+
+The old exe is kept as `vRadio.exe.old` / `vRadioTray.exe.old` until the next start. To go back,
+close vRadio and rename it. After an update, N1MM radio 2 may need a reconnect
+(Configurer → Hardware → OK).
 
 ## 2. N1MM setup
 
@@ -89,7 +107,23 @@ Configurer → Hardware, radio 2:
 - IP: **127.0.0.1**, port: **4532**
 
 Configurer → Broadcast Data:
-- **Radio** ticked, address **127.0.0.1:12060** (vRadio reads the TX focus from it)
+- **Radio** ticked, add **127.0.0.1:12064** to the addresses (space-separated), e.g.
+  `127.0.0.1:12060 127.0.0.1:12061 127.0.0.1:12062 127.0.0.1:12064`. vRadio reads the TX focus from it.
+
+Why 12064 and not 12060: on Windows only one program gets N1MM's packets on a UDP port. The other
+S55OO tools already use these ports:
+
+| UDP port | Used by |
+|---|---|
+| 12060 | Callbooker, QSOrouter, POUNCer (default), PingPong's n1mm_watch |
+| 12061 | POUNCer (own port) |
+| 12062 / 12063 | PingPong lamp / its alternative |
+| **12064** | **vRadio** |
+| 12070, 12080 | N1MM itself: do not use |
+| 12079 | POUNCer team |
+
+vRadio takes its port exclusively. If another program already has it, the log says
+`UDP 12064 is used by another program` and the tray icon turns red (`UDP 12064 busy`).
 
 ---
 
@@ -104,7 +138,7 @@ Configurer → Broadcast Data:
 | `--follow-band` | When radio VFO-A (N1MM radio 1) changes band, VFO-B jumps to that band (`AB;`). You can still move B afterwards. N1MM itself refuses to put both radios on one band; this gets around it. |
 | `--same-band` | Copy VFO-A to VFO-B once, at startup. |
 | `--auto-split` | vRadio decides the TX VFO itself: `ST1;` = TX on VFO-B, `ST0;` = TX on VFO-A (split off). CAT `TX;` from radio 2 → TX on VFO-B. After every TX→RX the TX VFO is set again. N1MM sees radio 2 as non-split. |
-| `--n1mm-udp 12060` | With `--auto-split`: follow N1MM's TX focus (`ActiveRadioNr`). Radio 2 focus → `ST1;`, radio 1 focus → `ST0;`. Works with WinKeyer CW too. Never switches during a transmission. |
+| `--n1mm-udp 12064` | With `--auto-split`: follow N1MM's TX focus (`ActiveRadioNr`). Radio 2 focus → `ST1;`, radio 1 focus → `ST0;`. Works with WinKeyer CW too. Never switches during a transmission. |
 | `--n1mm-radio 2` | Which N1MM radio number vRadio is (default 2). |
 | `--dual-rx --dual-rx-cmd FR00;` | Keep dual receive on: every 2 s read `FR;`, re-send `FR00;` if it changed. Overrides manual toggles. |
 | `--tx-follow` | At startup set TX to the controlled VFO. Ignored with `--auto-split`. |
@@ -113,6 +147,10 @@ Configurer → Broadcast Data:
 | `--cat COM1 --cat-baud 38400` | COM-port mode instead of TCP (software then uses COM2 of the VSPE pair). |
 | `-v` / `--log FILE` | Log every command / also write the log to a file (rotating, 4 x 2 MB). |
 | `--tray` | Run as a tray icon (vRadioTray.exe always does). |
+| `--auto-update` | At start, install a newer GitHub release and restart with it. |
+| `--update` | Install the latest release now, then exit. |
+| `--no-update-check` | Do not check GitHub for new versions. |
+| `--version` | Show the version. |
 
 N1MM macro: `{CAT2ASC VRAB;}` copies VFO-A → VFO-B on a key press.
 
@@ -158,7 +196,7 @@ Anything else is answered `?;`. Not mapped: KY (CW text), SH/SL (filters), EX (m
 - **Radio does not answer (no `ID0681;`):** COM14 is an ELTIMA virtual port, not the radio's USB.
   Start the program that links COM14 to the radio, and check the radio is on.
 - **N1MM shows "Can not set both radios to the same band!":** use `--follow-band` or the `VRAB` macro.
-- **TX on the wrong VFO:** check N1MM Broadcast Data → Radio → 127.0.0.1:12060, and look in the log for
+- **TX on the wrong VFO:** check N1MM Broadcast Data → Radio → 127.0.0.1:12064, and look in the log for
   `N1MM TX focus -> ...` lines.
 
 ## 8. Open items

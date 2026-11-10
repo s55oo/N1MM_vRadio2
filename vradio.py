@@ -25,6 +25,9 @@ import serial
 
 log = logging.getLogger("vradio")
 
+__version__ = "1.0.1"
+GITHUB_REPO = "s55oo/N1MM_vRadio2"
+
 # vRadioTray.exe is built without a console: then sys.stderr is None and we run in the tray.
 WINDOWED = sys.stderr is None
 APP_DIR = os.path.dirname(os.path.abspath(sys.executable if getattr(sys, "frozen", False) else __file__))
@@ -160,6 +163,7 @@ class TS2000Emulator:
         self.r = radio
         self.auto_split = auto_split
         self.want_own: bool | None = None   # N1MM TX focus on our radio? None = unknown
+        self.udp_error: str | None = None   # N1MM UDP port busy?
         self.transmitting = False
         self.ai = 0
         self.usb_data = usb_data
@@ -250,9 +254,25 @@ class TS2000Emulator:
     def n1mm_udp_loop(self, stop: threading.Event, port: int, my_radio: int):
         """Listen to N1MM RadioInfo broadcasts and follow ActiveRadioNr (TX focus)."""
         import re
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.bind(("", port))
+        # No SO_REUSEADDR: on Windows a shared UDP port silently hands each packet
+        # to only one listener. Take the port exclusively and complain loudly if busy.
+        while not stop.is_set():
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            try:
+                sock.bind(("", port))
+                self.udp_error = None
+                break
+            except OSError as e:
+                sock.close()
+                if self.udp_error is None:
+                    log.error("UDP %d is used by another program (%s) - TX focus NOT followed. "
+                              "Close it or pick another --n1mm-udp port; retrying every 5 s", port, e)
+                self.udp_error = f"UDP {port} busy"
+                stop.wait(5)
+        else:
+            return
         sock.settimeout(0.5)
         log.info("Listening for N1MM RadioInfo on UDP %d (we are N1MM radio %d)", port, my_radio)
         rx = re.compile(rb"<ActiveRadioNr>(\d+)</ActiveRadioNr>")
@@ -675,7 +695,8 @@ def main():
                          "to the other VFO (ST0)")
     ap.add_argument("--n1mm-udp", type=int, metavar="PORT",
                     help="with --auto-split: follow N1MM TX focus from its RadioInfo UDP broadcast "
-                         "(N1MM Configurer > Broadcast Data > Radio, e.g. 12060)")
+                         "(N1MM Configurer > Broadcast Data > Radio, e.g. 12064; avoid 12060-12063, "
+                         "used by Callbooker/QSOrouter/POUNCer/PingPong)")
     ap.add_argument("--n1mm-radio", type=int, default=2,
                     help="which N1MM radio number vRadio is (default 2)")
     ap.add_argument("--dual-rx", action="store_true",
@@ -687,6 +708,14 @@ def main():
     ap.add_argument("--log", metavar="FILE", help="also write the log to this file")
     ap.add_argument("--tray", action="store_true",
                     help="run as a system tray icon (vRadioTray.exe always does)")
+    ap.add_argument("--update", action="store_true",
+                    help="download and install the latest release from GitHub, then exit")
+    ap.add_argument("--auto-update", action="store_true",
+                    help="at start, install a newer GitHub release (if any) and restart with it")
+    ap.add_argument("--no-update-check", action="store_true",
+                    help="do not check GitHub for new versions")
+    ap.add_argument("--updated", action="store_true", help=argparse.SUPPRESS)
+    ap.add_argument("--version", action="version", version=f"vRadio {__version__}")
     a = ap.parse_args()
 
     if a.port:
@@ -705,21 +734,58 @@ def main():
     logging.basicConfig(level=logging.DEBUG if a.verbose else logging.INFO, handlers=handlers,
                         format="%(asctime)s %(levelname)-7s %(message)s", datefmt="%H:%M:%S")
 
-    state = {"radio": None, "emu": None, "server": None, "error": None, "args": a}
+    log.info("vRadio %s", __version__)
+    cleanup_old_exe()
+    state = {"radio": None, "emu": None, "server": None, "error": None, "args": a,
+             "update": None, "relaunch": None}
     stop = threading.Event()
 
+    if a.update or (a.auto_update and not a.updated):     # --updated: just restarted, no loop
+        if not getattr(sys, "frozen", False):
+            log.error("Updating works only for the exe, not for vradio.py")
+            if a.update:
+                return
+        else:
+            try:
+                info = check_update()
+                if info is None:
+                    log.info("vRadio %s is the latest version", __version__)
+                    if a.update:
+                        if WINDOWED:
+                            message_box(f"vRadio {__version__} is the latest version.")
+                        return
+                else:
+                    exe = install_update(info)
+                    if a.update:
+                        msg = f"vRadio updated to {info['version']}. Start it again."
+                        message_box(msg) if WINDOWED else print(msg)
+                        return
+                    relaunch(exe)
+                    return
+            except Exception as e:
+                log.error("Update failed: %s - starting this version", e)
+                if a.update:
+                    if WINDOWED:
+                        message_box(f"vRadio update failed: {e}")
+                    return
+
     if tray:
-        if not single_instance():
+        if not single_instance(wait=20 if a.updated else 0):
             message_box("vRadio is already running (see the tray icon).")
             return
         t = threading.Thread(target=run_core, args=(a, stop, state), daemon=True)
         t.start()
         run_tray(a, stop, state)
         stop.set()
+        t.join(8)
         if state["radio"]:
             state["radio"].close()
+        if state["relaunch"]:
+            relaunch(state["relaunch"])
         return
 
+    if not a.no_update_check:
+        threading.Thread(target=update_check_loop, args=(stop, state), daemon=True).start()
     try:
         run_core(a, stop, state)
     except KeyboardInterrupt:
@@ -816,15 +882,113 @@ def _run_core(a, stop: threading.Event, state: dict):
 
 
 # ---------------------------------------------------------------------------
+# Auto-update from GitHub Releases
+# ---------------------------------------------------------------------------
+def _ver(s: str) -> tuple:
+    import re
+    return tuple(int(x) for x in re.findall(r"\d+", s)[:3])
+
+
+def check_update(timeout: float = 8.0) -> dict | None:
+    """Return info about a newer release that has an asset for this exe, else None."""
+    import json
+    import urllib.request
+    if not getattr(sys, "frozen", False):
+        return None
+    req = urllib.request.Request(f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest",
+                                 headers={"User-Agent": f"vRadio/{__version__}",
+                                          "Accept": "application/vnd.github+json"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        rel = json.load(r)
+    tag = rel.get("tag_name", "")
+    if not tag or _ver(tag) <= _ver(__version__):
+        return None
+    name = os.path.basename(sys.executable).lower()
+    for asset in rel.get("assets", []):
+        if asset.get("name", "").lower() == name:
+            return {"version": tag, "url": asset["browser_download_url"], "size": asset["size"],
+                    "page": rel.get("html_url", "")}
+    log.info("Release %s has no %s - not updating", tag, name)
+    return None
+
+
+def install_update(info: dict) -> str:
+    """Download the new exe next to the running one and swap them. Returns the exe path."""
+    import urllib.request
+    exe = sys.executable
+    new, old = exe + ".new", exe + ".old"
+    log.info("Downloading vRadio %s (%d bytes) ...", info["version"], info["size"])
+    req = urllib.request.Request(info["url"], headers={"User-Agent": f"vRadio/{__version__}"})
+    with urllib.request.urlopen(req, timeout=60) as r, open(new, "wb") as f:
+        while True:
+            chunk = r.read(65536)
+            if not chunk:
+                break
+            f.write(chunk)
+    with open(new, "rb") as f:
+        head = f.read(2)
+    if os.path.getsize(new) != info["size"] or head != b"MZ":
+        os.remove(new)
+        raise RuntimeError("downloaded file is incomplete or not an exe")
+    if os.path.exists(old):
+        os.remove(old)
+    os.replace(exe, old)            # a running exe can be renamed, not overwritten
+    os.replace(new, exe)
+    log.info("Updated to %s (previous version kept as %s)", info["version"], os.path.basename(old))
+    return exe
+
+
+def relaunch(exe: str):
+    """Start the (new) exe with the same options; the caller then exits."""
+    import subprocess
+    args = [x for x in sys.argv[1:] if x not in ("--update", "--updated")] + ["--updated"]
+    flags = 0x00000008 | 0x00000200 if WINDOWED else 0x00000010   # DETACHED|NEW_GROUP / NEW_CONSOLE
+    subprocess.Popen([exe] + args, creationflags=flags, close_fds=True)
+
+
+def cleanup_old_exe():
+    old = sys.executable + ".old"
+    if getattr(sys, "frozen", False) and os.path.exists(old):
+        try:
+            os.remove(old)
+        except OSError:
+            pass                      # previous version still closing; next start removes it
+
+
+def update_check_loop(stop: threading.Event, state: dict, notify=None, every: float = 6 * 3600):
+    """Check for a new release now and every few hours; never installs by itself."""
+    while not stop.is_set():
+        try:
+            info = check_update()
+            if info and (state.get("update") or {}).get("version") != info["version"]:
+                state["update"] = info
+                log.warning("vRadio %s is available (this is %s). %s", info["version"], __version__,
+                            "Tray menu: Install update." if notify else "Run: vRadio.exe --update")
+                if notify:
+                    notify(f"vRadio {info['version']} is available - right-click the tray icon to update.")
+        except Exception as e:
+            log.debug("update check failed: %s", e)
+        stop.wait(every)
+
+
+# ---------------------------------------------------------------------------
 # System tray
 # ---------------------------------------------------------------------------
-def single_instance() -> bool:
-    """Only one tray vRadio at a time (two would fight over COM14)."""
+def single_instance(wait: float = 0.0) -> bool:
+    """Only one tray vRadio at a time (two would fight over COM14).
+    After an update the old copy may still be closing, so the new one waits `wait` seconds."""
     import ctypes
     k32 = ctypes.windll.kernel32
-    k32.CreateMutexW(None, False, "Local\\vRadioTray")
-    single_instance.ok = k32.GetLastError() != 183      # ERROR_ALREADY_EXISTS
-    return single_instance.ok
+    end = time.time() + wait
+    while True:
+        h = k32.CreateMutexW(None, False, "Local\\vRadioTray")
+        if k32.GetLastError() != 183:                    # ERROR_ALREADY_EXISTS
+            single_instance.handle = h
+            return True
+        k32.CloseHandle(h)
+        if time.time() >= end:
+            return False
+        time.sleep(0.5)
 
 
 def message_box(text: str, title: str = "vRadio"):
@@ -874,6 +1038,11 @@ def status_lines(a, state: dict) -> tuple[list[str], str]:
         else:
             f = f"TX focus: other radio (VFO-{other})"
         lines.append(f)
+    if emu is not None and emu.udp_error:
+        lines.append(f"{emu.udp_error} - TX focus not followed")
+        color = "#c0392b"
+    if state.get("update"):
+        lines.append(f"Update {state['update']['version']} available")
     if emu is not None and emu.transmitting and radio and radio.ok:
         lines.append("TRANSMITTING")
         color = "#d35400"
@@ -891,7 +1060,7 @@ def run_tray(a, stop: threading.Event, state: dict):
         return icons[color]
 
     def line(i):
-        return lambda item: (status_lines(a, state)[0] + ["", "", "", ""])[i]
+        return lambda item: (status_lines(a, state)[0] + [""] * 6)[i]
 
     def visible(i):
         return lambda item: len(status_lines(a, state)[0]) > i
@@ -917,6 +1086,52 @@ def run_tray(a, stop: threading.Event, state: dict):
         stop.set()
         icon.stop()
 
+    def notify(text):
+        try:
+            icon.notify(text, "vRadio")
+        except Exception:
+            pass
+
+    def do_update(icon, item):
+        info = state.get("update")
+        emu = state["emu"]
+        if not info:
+            return
+        if emu is not None and emu.transmitting:
+            notify("Not now - the radio is transmitting.")
+            return
+
+        def work():
+            try:
+                state["relaunch"] = install_update(info)
+            except Exception as e:
+                log.error("Update failed: %s", e)
+                notify(f"Update failed: {e}")
+                return
+            log.info("Restarting with %s", info["version"])
+            stop.set()                  # main() closes COM14 and starts the new exe
+            icon.stop()
+        threading.Thread(target=work, daemon=True).start()
+
+    def check_now(icon, item):
+        def work():
+            try:
+                info = check_update()
+            except Exception as e:
+                notify(f"Update check failed: {e}")
+                return
+            if info:
+                state["update"] = info
+                icon.update_menu()
+                notify(f"vRadio {info['version']} is available - right-click > Install update.")
+            else:
+                notify(f"vRadio {__version__} is the latest version.")
+        threading.Thread(target=work, daemon=True).start()
+
+    def update_label(item):
+        info = state.get("update")
+        return f"Install update {info['version']} (restarts vRadio)" if info else "Install update"
+
     own = "B" if a.vfo.upper() == "B" else "A"
     other = "A" if own == "B" else "B"
     menu = pystray.Menu(
@@ -924,17 +1139,23 @@ def run_tray(a, stop: threading.Event, state: dict):
         pystray.MenuItem(line(1), None, enabled=False, visible=visible(1)),
         pystray.MenuItem(line(2), None, enabled=False, visible=visible(2)),
         pystray.MenuItem(line(3), None, enabled=False, visible=visible(3)),
+        pystray.MenuItem(line(4), None, enabled=False, visible=visible(4)),
+        pystray.MenuItem(line(5), None, enabled=False, visible=visible(5)),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem(f"Copy VFO-{other} -> VFO-{own} (same band)", copy_ab),
         pystray.MenuItem("Open log", open_log),
         pystray.MenuItem("Open vRadio folder", open_folder),
         pystray.Menu.SEPARATOR,
+        pystray.MenuItem(update_label, do_update, visible=lambda item: bool(state.get("update"))),
+        pystray.MenuItem(f"Check for updates (v{__version__})", check_now),
         pystray.MenuItem("Exit vRadio", quit_app),
     )
     icon = pystray.Icon("vRadio", icon_for("#7f8c8d"), "vRadio - starting", menu)
 
     def updater(icon):
         icon.visible = True
+        if not a.no_update_check:
+            threading.Thread(target=update_check_loop, args=(stop, state, notify), daemon=True).start()
         last = None
         while not stop.is_set():
             lines, color = status_lines(a, state)
