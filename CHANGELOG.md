@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- `split_off_idle` is back to `no` in `vradio.example.ini`, and the README warns against it with a
+  WinKeyer. In a contest on 10 Nov the WinKeyer keyed radio 2 without CAT `TX;`, so with
+  `split_off_idle = yes` radio 2's CW stayed on VFO-A (log: `keyed without CAT TX`). Use the
+  default: split follows N1MM's TX focus and the split keeper corrects it while receiving.
+
 ## v1.0.5 - 10 Nov 2026
 
 - **DJ controller jog wheel tunes radio 2** (VFO-B). `vRadioDJ.exe` is vRadio with the wheel on and
