@@ -25,7 +25,56 @@ import serial
 
 log = logging.getLogger("vradio")
 
-__version__ = "1.0.5"
+
+class TrafficMonitor:
+    """Live traffic for the Monitor window. Each kind is off until its tick is set, so it
+    costs nothing in normal operation."""
+    POLLS = {"IF", "FA", "FB", "MD", "SM", "TX", "FT", "FR", "AI", "PS", "ID", "TY", "OI", "ST",
+             "AG", "RG", "SQ", "PC", "RA", "PA", "NB", "NR", "BC", "RT", "XT", "RU", "RD", "KS", "SH", "SL"}
+
+    def __init__(self):
+        import collections
+        self.on = {"wk": False, "cat": False, "radio": False}
+        self.hide_polls = True
+        self.lines = collections.deque(maxlen=5000)
+        self.lock = threading.Lock()
+
+    def add(self, kind: str, text: str):
+        if self.on.get(kind):
+            stamp = time.strftime("%H:%M:%S") + f".{int(time.time() * 1000) % 1000:03d}"
+            with self.lock:
+                self.lines.append(f"{stamp} {text}")
+
+    def take(self) -> list[str]:
+        with self.lock:
+            out = list(self.lines)
+            self.lines.clear()
+        return out
+
+    def is_poll(self, cmd: str) -> bool:
+        """A plain query without arguments (N1MM asks these all the time)."""
+        c = cmd.strip().rstrip(";").upper()
+        return c[:2] in self.POLLS and len(c) <= 3
+
+    def wk(self, direction: str, data: bytes):
+        if self.on["wk"] and data:
+            txt = "".join(chr(b) if 0x20 <= b < 0x7F else "." for b in data)
+            self.add("wk", f"WK  {direction:<14} {data.hex(' ').upper():<40} {txt}")
+
+    def cat(self, who: str, cmd: str, reply: str):
+        # TS-2000 "TX;" is PTT, not a query: always show it
+        ptt = cmd.strip().upper()[:2] in ("TX", "RX")
+        if self.on["cat"] and (ptt or not (self.hide_polls and self.is_poll(cmd))):
+            self.add("cat", f"CAT {who:<15} {cmd + ';':<18} -> {reply or '(none)'}")
+
+    def radio(self, cmd: str, ans: str | None):
+        if self.on["radio"] and not (self.hide_polls and ans is not None and self.is_poll(cmd)):
+            self.add("radio", f"RIG {cmd:<18} " + ("(set)" if ans is None else f"-> {ans}"))
+
+
+MON = TrafficMonitor()
+
+__version__ = "1.0.6"
 GITHUB_REPO = "s55oo/N1MM_vRadio2"
 
 # vRadioTray.exe is built without a console: then sys.stderr is None and we run in the tray.
@@ -113,13 +162,21 @@ class YaesuRadio:
                         self.open()
                     self.ser.reset_input_buffer()
                     self.ser.write(cmd.encode("ascii"))
-                    ans = self._read_answer()
-                    # skip any unsolicited data that is not our answer
-                    for _ in range(3):
+                    # The microHAM router can also deliver answers meant for another program
+                    # (or the radio's auto-information): only accept the answer to OUR question.
+                    t_end = time.monotonic() + 0.8
+                    skipped = []
+                    while True:
+                        ans = self._read_answer(max(0.05, t_end - time.monotonic()))
                         if ans.startswith(expect) or ans == "?;":
                             break
-                        ans = self._read_answer()
+                        skipped.append(ans)
+                        if time.monotonic() >= t_end or len(skipped) > 20:
+                            raise RadioError(f"no {expect} answer (only {', '.join(skipped[:3])})")
+                    if skipped:
+                        log.debug("  radio %-8s skipped %s", cmd, " ".join(skipped))
                     log.debug("  radio %-8s -> %s", cmd, ans)
+                    MON.radio(cmd, ans)
                     self.ok = True
                     if ans == "?;":
                         raise RadioError(f"radio rejected {cmd}")
@@ -146,6 +203,7 @@ class YaesuRadio:
                     self.open()
                 self.ser.write(cmd.encode("ascii"))
                 log.debug("  radio %-8s (set)", cmd)
+                MON.radio(cmd, None)
                 time.sleep(0.02)
             except serial.SerialException as e:
                 log.warning("Radio port error: %s", e)
@@ -168,6 +226,8 @@ class TS2000Emulator:
         self.udp_last = 0.0                 # time of the last N1MM RadioInfo packet
         self.transmitting = False
         self.cat_tx = False                 # between CAT TX; and RX; from N1MM radio 2
+        self.freq_gen = 0                   # +1 whenever N1MM or follow-band sets our VFO
+        self.remote_cw = False              # laptop 2's CW (WinKeyer proxy) is being sent: keep TX on ours
         self.split_off_idle = False         # split on only during radio 2's CAT TX
         self.ai = 0
         self.usb_data = usb_data
@@ -189,6 +249,7 @@ class TS2000Emulator:
 
     def _set_freq(self, vfo: str, p: str):
         self.r.send(f"F{self.ymap[vfo]}{int(p):09d};")
+        self.freq_gen += 1          # tells the DJ wheel to re-read the frequency
 
     def _mode(self) -> str:
         return Y2K_MODE.get(self._val(f"MD{self.band};", 3), "2")
@@ -245,13 +306,13 @@ class TS2000Emulator:
             self.want_own = own
             if self.split_off_idle:
                 log.info("N1MM TX focus -> radio %s", "ours" if own else "other")
-            elif not self.transmitting and not self.cat_tx:   # never switch VFO mid-transmission
+            elif not self.transmitting and not self.cat_tx and not self.remote_cw:  # never mid-TX
                 self.apply_idle_tx("N1MM TX focus -> radio %s" % ("ours" if own else "other"))
 
     def tx_vfo_ok(self) -> bool:
         """Is the radio's TX VFO where it should be right now?"""
         tx_sub = self._val("FT;", 2) == "1"
-        own = self.cat_tx or self.idle_own()
+        own = self.cat_tx or self.remote_cw or self.idle_own()
         want_sub = self.swap if own else not self.swap
         return tx_sub == want_sub
 
@@ -269,16 +330,18 @@ class TS2000Emulator:
                     if self.transmitting and not is_tx:
                         self.transmitting = False
                         self.cat_tx = False
-                        self.apply_idle_tx("TX -> RX")
+                        if not self.remote_cw:      # break-in gap inside laptop 2's CW: keep ST1
+                            self.apply_idle_tx("TX -> RX")
                     elif is_tx and not self.transmitting:
                         if known and not self.tx_vfo_ok():
                             log.warning("TX started on the wrong VFO - keyed before vRadio could "
                                         "correct it")
-                        if self.split_off_idle and self.want_own and not self.cat_tx:
+                        if self.split_off_idle and self.want_own and not self.cat_tx and not self.remote_cw:
                             log.warning("Radio 2 has TX focus but keyed without CAT TX; it transmits "
                                         "on VFO-%s. In N1MM enable PTT via radio command for radio 2",
                                         "A" if self.swap else "B")
-                    elif not is_tx and not self.cat_tx and known and time.time() >= quiet_until:
+                    elif (not is_tx and not self.cat_tx and not self.remote_cw and known
+                          and time.time() >= quiet_until):
                         if self.tx_vfo_ok():
                             fixes = 0
                         else:
@@ -355,6 +418,7 @@ class TS2000Emulator:
     def copy_to_own(self, reason: str = ""):
         """Copy the other radio VFO (freq + mode) onto the VFO this software controls."""
         self.r.send("AB;" if self.swap else "BA;")     # AB = MAIN->SUB, BA = SUB->MAIN
+        self.freq_gen += 1
         log.info("Copied radio VFO-%s -> VFO-%s %s", "A" if self.swap else "B",
                  "B" if self.swap else "A", reason)
 
@@ -449,7 +513,9 @@ class TS2000Emulator:
                 self.tx_on_own()          # transmit on the VFO this software controls
                 time.sleep(0.05)
             r.send("TX1;")
-            return ""
+            # "TX0;" (with a parameter) is answered by a real TS-2000; DXLog waits for that
+            # answer and reconnects without it. Plain "TX;" (N1MM) gets no answer.
+            return f"TX{p[0]};" if p else ""
         if c == "RX":
             r.send("TX0;")
             if self.auto_split:
@@ -617,6 +683,7 @@ class CatServer:
                             continue
                         reply = self.emu.handle(cmd)
                         log.debug("app %-16s -> %s", cmd + ";", reply or "(none)")
+                        MON.cat(self.port, cmd, reply)
                         self.write(reply)
                     if len(buf) > 512:
                         buf = ""
@@ -634,6 +701,17 @@ class TcpCatServer:
         self.clients: list[socket.socket] = []
         self.clock = threading.Lock()
         self.stop = threading.Event()
+
+    def peers(self) -> list[str]:
+        """IP addresses of the connected clients."""
+        out = []
+        with self.clock:
+            for c in self.clients:
+                try:
+                    out.append(c.getpeername()[0])
+                except OSError:
+                    pass
+        return out
 
     def _send(self, conn: socket.socket, s: str):
         if s:
@@ -664,6 +742,7 @@ class TcpCatServer:
         with self.clock:
             self.clients.append(conn)
         buf = ""
+        keyed = False                  # this client keyed the radio by CAT and hasn't sent RX; yet
         try:
             while not self.stop.is_set():
                 data = conn.recv(1024)
@@ -677,6 +756,12 @@ class TcpCatServer:
                         continue
                     reply = self.emu.handle(cmd)
                     log.debug("tcp %-16s -> %s", cmd + ";", reply or "(none)")
+                    MON.cat(addr[0], cmd, reply)
+                    c2 = cmd[:2].upper()
+                    if c2 == "TX":
+                        keyed = True
+                    elif c2 == "RX":
+                        keyed = False
                     self._send(conn, reply)
                 if len(buf) > 512:
                     buf = ""
@@ -688,6 +773,10 @@ class TcpCatServer:
                     self.clients.remove(conn)
             conn.close()
             log.info("TCP client disconnected: %s:%d", *addr)
+            if keyed and self.emu.cat_tx:
+                # it keyed the radio and left without RX;: never leave the radio transmitting
+                log.warning("TCP client %s left while keying the radio - PTT released", addr[0])
+                self.emu.handle("RX")
 
     def run(self):
         threading.Thread(target=self.auto_info_loop, daemon=True).start()
@@ -798,6 +887,8 @@ class JogTuner:
         self.error: str | None = None
         self.last_move = 0.0
         self.freq: int | None = None        # cached frequency while turning
+        self.gen = -1                       # emu.freq_gen when self.freq was read
+        self.target = f"VFO-{emu.ymap['A']}" if emu is not None else "VFO"
 
     def ticks_from(self, status: int, d1: int, d2: int) -> int:
         if self.learn:
@@ -820,13 +911,14 @@ class JogTuner:
     def apply(self, ticks: int):
         """Move our VFO by ticks * step (never while transmitting)."""
         emu = self.emu
-        if not ticks or emu.transmitting or emu.cat_tx:
+        if not ticks or emu.transmitting or emu.cat_tx or emu.remote_cw:
             return
         y = emu.ymap["A"]                    # radio VFO letter vRadio controls (B = SUB)
         with emu.lock:
             now = time.time()
-            if self.freq is None or now - self.last_move > 1.0:
-                self.freq = int(emu._val(f"F{y};", 2))     # re-read after a pause (knob/N1MM moved it)
+            if self.freq is None or now - self.last_move > 1.0 or self.gen != emu.freq_gen:
+                # re-read after a pause (radio knob) or when N1MM / follow-band set the VFO
+                self.freq, self.gen = int(emu._val(f"F{y};", 2)), emu.freq_gen
             f = self.freq + ticks * self.step * self.multiplier(ticks)
             f = max(30_000, min(f, 75_000_000))
             f -= f % self.step                              # stay on the step grid
@@ -862,8 +954,8 @@ class JogTuner:
                         if midi.open(want, self.events):
                             self.skip_connect_dump(stop)
                             self.device, self.error = midi.name, None
-                            log.info("DJ wheel: '%s' connected - jog tunes VFO-%s, %d Hz per step",
-                                     midi.name, self.emu.ymap["A"], self.step)
+                            log.info("DJ wheel: '%s' connected - jog tunes %s, %d Hz per step",
+                                     midi.name, self.target, self.step)
                         elif self.error != "not found":
                             self.error = "not found"
                             log.warning("DJ wheel: no MIDI device matching '%s' (found: %s) - "
@@ -902,11 +994,308 @@ class JogTuner:
             midi.close()
 
 # ---------------------------------------------------------------------------
+# WinKeyer proxy: laptop 2's N1MM shares the real WinKeyer over the LAN
+# ---------------------------------------------------------------------------
+# Host -> WinKeyer commands and how many argument bytes follow them (WinKeyer 2/3 protocol).
+WK_ARGS = {0x01: 1, 0x02: 1, 0x03: 1, 0x04: 2, 0x05: 3, 0x06: 1, 0x07: 0, 0x08: 0, 0x09: 1,
+           0x0A: 0, 0x0B: 1, 0x0C: 1, 0x0D: 1, 0x0E: 1, 0x0F: 15, 0x10: 1, 0x11: 1, 0x12: 1,
+           0x13: 0, 0x14: 1, 0x15: 0, 0x16: 1, 0x17: 1, 0x18: 1, 0x19: 1, 0x1A: 1, 0x1B: 2,
+           0x1C: 1, 0x1D: 1, 0x1E: 0, 0x1F: 0}
+# Admin (0x00 xx) sub-commands and their argument bytes after the sub-command.
+WK_ADMIN_ARGS = {0x00: 1, 0x04: 1, 0x0D: 256, 0x0E: 1, 0x0F: 1, 0x13: 1, 0x16: 1, 0x19: 1}
+# Commands that belong to a message: forwarded to the real WinKeyer (text is 0x20-0x7F).
+WK_MESSAGE = {0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1F}
+WK_BUSY = 0x04
+
+
+class WinkeyProxy:
+    """Gives a remote N1MM (laptop 2) its own virtual WinKeyer on a TCP port.
+
+    The real WinKeyer stays with laptop 1's N1MM (VSPE splitter: COM1 for N1MM, COM2 for us).
+    The remote N1MM's setup commands (host open, speed, weighting, PTT times...) are answered
+    here and never reach the real keyer, so laptop 1's settings are untouched. Only its CW text
+    goes to the keyer, with the remote speed as a buffered speed change. Around every remote
+    message vRadio puts TX on our VFO (ST1) and gives it back (ST0) when the keyer is done."""
+
+    def __init__(self, emu, port: str, baud: int, host: str, tcp: int,
+                 version: int = 23, split_delay: float = 0.03):
+        self.emu, self.port, self.baud, self.host, self.tcp = emu, port, baud, host, tcp
+        self.version, self.split_delay = version, split_delay
+        self.ser = None
+        self.wlock = threading.Lock()
+        self.client = None
+        self.client_addr = None
+        self.error = None
+        self.real_busy = False            # from the real keyer's status bytes (anyone's CW)
+        self.remote_wpm = 0               # remote N1MM's speed; 0 = use the speed pot
+        self.active = False               # a remote message is being sent
+        self.seen_busy = False
+        self.last_remote = 0.0
+        self.started = 0.0
+        self.last_status = 0xC0
+
+    # --- real keyer side ------------------------------------------------------
+    def open_serial(self):
+        self.ser = serial.Serial(self.port, self.baud, bytesize=8, parity="N", stopbits=2,
+                                 timeout=0.1, write_timeout=1)
+
+    def write_real(self, data: bytes):
+        MON.wk(f"-> keyer {self.port}", data)
+        with self.wlock:
+            self.ser.write(data)
+
+    def serial_loop(self, stop: threading.Event):
+        while not stop.is_set():
+            if self.ser is None:
+                try:
+                    self.open_serial()
+                    self.error = None
+                    log.info("WinKeyer proxy: real keyer on %s, remote N1MM on TCP %s:%d",
+                             self.port, self.host, self.tcp)
+                except (serial.SerialException, OSError) as e:
+                    if self.error != str(e):
+                        log.error("WinKeyer proxy: cannot open %s: %s - retrying every 5 s", self.port, e)
+                    self.error = str(e)
+                    stop.wait(5)
+                    continue
+            try:
+                data = self.ser.read(64)
+            except (serial.SerialException, OSError) as e:
+                log.warning("WinKeyer proxy: %s: %s", self.port, e)
+                try:
+                    self.ser.close()
+                except Exception:
+                    pass
+                self.ser, self.error = None, str(e)
+                continue
+            if data:
+                MON.wk(f"<- keyer {self.port}", data)
+            for b in data:
+                self.from_real(b)
+            self.check_end()
+
+    def from_real(self, b: int):
+        """One byte from the real WinKeyer (it answers both hosts through the splitter)."""
+        if b & 0xC0 == 0xC0:                      # status byte
+            if b & 0x08:                          # WK2 pushbutton report: not keyer state
+                return
+            self.real_busy = bool(b & WK_BUSY)
+            if self.active:
+                if self.real_busy:
+                    self.seen_busy = True
+                self.last_status = b
+                self.to_client(bytes([b]))
+        elif b & 0xC0 == 0x80:                    # speed pot: the pot is at laptop 1, keep it there
+            return
+        elif self.active:                         # echo of the characters being sent
+            self.to_client(bytes([b]))
+
+    # --- remote N1MM side -----------------------------------------------------
+    def to_client(self, data: bytes):
+        c = self.client
+        if c is not None:
+            MON.wk(f"-> {self.client_addr}", data)
+            try:
+                c.sendall(data)
+            except OSError:
+                pass
+
+    def tcp_loop(self, stop: threading.Event):
+        srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            srv.bind((self.host, self.tcp))
+        except OSError as e:
+            self.error = f"TCP {self.tcp}: {e}"
+            log.error("WinKeyer proxy: cannot listen on TCP %d: %s", self.tcp, e)
+            return
+        srv.listen(1)
+        srv.settimeout(0.5)
+        while not stop.is_set():
+            try:
+                conn, addr = srv.accept()
+            except socket.timeout:
+                continue
+            if self.client is not None:
+                log.warning("WinKeyer proxy: second client %s refused (one remote keyer only)", addr[0])
+                conn.close()
+                continue
+            conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            self.client, self.client_addr = conn, addr[0]
+            log.info("WinKeyer proxy: remote keyer connected from %s", addr[0])
+            try:
+                self.client_loop(conn, stop)
+            finally:
+                self.end_message("remote keyer disconnected")
+                self.client, self.client_addr = None, None
+                conn.close()
+                log.info("WinKeyer proxy: remote keyer %s disconnected", addr[0])
+        srv.close()
+
+    def client_loop(self, conn, stop: threading.Event):
+        conn.settimeout(0.2)
+        pending = []                      # bytes of a command still waiting for its arguments
+        while not stop.is_set():
+            try:
+                data = conn.recv(512)
+            except socket.timeout:
+                self.check_end()
+                continue
+            except OSError:
+                return
+            if not data:
+                return
+            MON.wk(f"<- {self.client_addr}", data)
+            for b in data:
+                pending.append(b)
+                need = self.cmd_length(pending)
+                if need is not None and len(pending) >= need:
+                    self.handle_cmd(bytes(pending))
+                    pending = []
+
+    @staticmethod
+    def cmd_length(p) -> "int | None":
+        """Total length of the command starting at p[0], or None if not known yet."""
+        c = p[0]
+        if c >= 0x20:
+            return 1
+        if c == 0x00:
+            if len(p) < 2:
+                return None
+            return 2 + WK_ADMIN_ARGS.get(p[1], 0)
+        if c == 0x16:                       # pointer commands: 0x16 0x00 | 0x16 0x01..0x03 nn
+            if len(p) < 2:
+                return None
+            return 2 if p[1] == 0x00 else 3
+        return 1 + WK_ARGS.get(c, 0)
+
+    def reply(self, data: bytes):
+        self.to_client(data)
+
+    def handle_cmd(self, cmd: bytes):
+        c = cmd[0]
+        if c >= 0x20 or c in WK_MESSAGE:
+            self.send_message(cmd)
+            return
+        if c == 0x00:                                  # admin: answered here, never forwarded
+            sub = cmd[1]
+            if sub == 0x02:                            # host open -> firmware version
+                log.info("WinKeyer proxy: remote N1MM opened the keyer")
+                self.reply(bytes([self.version]))
+            elif sub == 0x03:
+                log.info("WinKeyer proxy: remote N1MM closed the keyer")
+            elif sub == 0x04:                          # echo test
+                self.reply(cmd[2:3])
+            elif sub == 0x07:                          # get values: 15 plausible bytes
+                self.reply(bytes([0x00, 0x8C] + [0x00] * 13))
+            elif sub in (0x09, 0x15, 0x17, 0x18):      # cal / Vcc / minor rev / IC type
+                self.reply(b"\x00")
+            elif sub == 0x0C:                          # dump EEPROM
+                self.reply(bytes(256))
+            return
+        if c == 0x02:                                  # remote speed: used for its own messages
+            self.remote_wpm = cmd[1]
+        elif c == 0x0F:                                # load defaults: byte 2 is the speed
+            self.remote_wpm = cmd[2]
+        elif c == 0x07:                                # get speed pot
+            self.reply(bytes([0x80]))
+        elif c == 0x15:                                # request status
+            self.reply(bytes([self.last_status if self.active else 0xC0]))
+        elif c in (0x0A, 0x06, 0x08):                  # clear buffer / pause / backspace
+            if self.active:
+                self.write_real(cmd)
+                if c == 0x0A:
+                    log.info("WinKeyer proxy: remote message aborted")
+        elif c == 0x0B:                                # key immediate (tune)
+            if cmd[1]:
+                if self.start_message():
+                    self.write_real(cmd)
+            elif self.active:
+                self.write_real(cmd)
+        # everything else (sidetone, weighting, PTT times, modes, pins...) stays here
+
+    # --- one remote message ---------------------------------------------------
+    def start_message(self) -> bool:
+        """Wait for laptop 1's keyer and transmitter to be free, then TX on our VFO (ST1)."""
+        if self.active:
+            return True
+        if self.ser is None:
+            return False
+        end = time.time() + 10
+        while (self.real_busy or self.emu.transmitting) and time.time() < end:
+            time.sleep(0.05)
+        if self.real_busy or self.emu.transmitting:
+            log.warning("WinKeyer proxy: laptop 1 is still transmitting - remote message dropped")
+            return False
+        with self.emu.lock:
+            self.emu.remote_cw = True
+            self.emu.tx_on_own()
+        time.sleep(self.split_delay)                  # let the radio switch before the keyer keys
+        self.active, self.seen_busy = True, False
+        self.started = self.last_remote = time.time()
+        self.last_status = 0xC0 | WK_BUSY
+        if self.remote_wpm:
+            self.write_real(bytes([0x1C, self.remote_wpm]))   # buffered speed: laptop 1 keeps its own
+        log.info("WinKeyer proxy: remote CW - TX on VFO-%s", "B" if self.emu.swap else "A")
+        return True
+
+    def send_message(self, cmd: bytes):
+        if self.start_message():
+            self.write_real(cmd)
+            self.last_remote = time.time()
+
+    def check_end(self):
+        """The message is done when the keyer has been busy and is idle again
+        (or never got busy within 2 s, e.g. only commands were sent)."""
+        if not self.active:
+            return
+        quiet = time.time() - self.last_remote
+        if self.real_busy or quiet < 0.25:
+            if time.time() - self.started > 120:
+                self.end_message("no end after 120 s")
+            return
+        if self.seen_busy or quiet > 2.0:
+            self.end_message()
+
+    def end_message(self, why: str = ""):
+        if not self.active:
+            return
+        self.active = False
+        try:
+            if self.remote_wpm and self.ser is not None:
+                self.write_real(b"\x1E")              # cancel the buffered speed change
+        except (serial.SerialException, OSError):
+            pass
+        self.last_status = 0xC0
+        self.to_client(b"\xC0")
+        with self.emu.lock:
+            self.emu.remote_cw = False
+            if not self.emu.transmitting:            # else the TX watcher does it at TX -> RX
+                try:
+                    self.emu.apply_idle_tx("Remote CW done")
+                except RadioError as e:
+                    log.warning("WinKeyer proxy: %s", e)
+        if why:
+            log.info("WinKeyer proxy: %s", why)
+
+    def status(self) -> str:
+        if self.error:
+            return f"WinKeyer {self.port}: {self.error}"[:100]
+        if self.ser is None:
+            return f"WinKeyer {self.port}: opening..."
+        who = f"remote {self.client_addr}" if self.client_addr else f"TCP {self.tcp} waiting"
+        return f"WinKeyer {self.port}: {who}" + (" - SENDING" if self.active else "")
+
+
+# ---------------------------------------------------------------------------
 # Settings file (INI)
 # ---------------------------------------------------------------------------
 # vRadioDJ.exe = the same program with the DJ wheel on by default and its own settings file
-IS_DJ = os.path.basename(sys.executable if getattr(sys, "frozen", False) else "").lower().startswith("vradiodj")
-CONFIG_NAME = "vradiodj.ini" if IS_DJ else "vradio.ini"
+_EXE = os.path.basename(sys.executable if getattr(sys, "frozen", False) else "").lower()
+IS_DJ = _EXE.startswith("vradiodj")
+# vRadioServer.exe = the same program set up as the server for remote PCs (vRadioClient)
+IS_SERVER = _EXE.startswith("vradioserver")
+CONFIG_NAME = "vradiodj.ini" if IS_DJ else "vradioserver.ini" if IS_SERVER else "vradio.ini"
 CONFIG_SECTION = "vradio"
 # options that make no sense in a settings file
 NOT_IN_CONFIG = {"help", "version", "port", "baud", "update", "updated", "config", "no_config",
@@ -1036,6 +1425,16 @@ def main():
     ap.add_argument("--midi-no-accel", action="store_true", help="fixed step size, no acceleration")
     ap.add_argument("--midi-learn", action="store_true",
                     help="log every MIDI message (to find the wheel's controller number)")
+    ap.add_argument("--winkey", metavar="COM",
+                    help="share the WinKeyer with a second PC: our side of a VSPE splitter (e.g. COM2; "
+                         "laptop 1's N1MM keeps the other side). The second PC connects with vRadioClient")
+    ap.add_argument("--winkey-baud", type=int, default=1200, help="WinKeyer baud (default 1200)")
+    ap.add_argument("--winkey-tcp", type=int, default=4533,
+                    help="TCP port for the second PC's WinKeyer (default 4533; same address as --tcp-host)")
+    ap.add_argument("--winkey-version", type=int, default=23,
+                    help="firmware version reported to the second PC's N1MM (default 23 = WinKeyer 2.3)")
+    ap.add_argument("--winkey-split-delay", type=int, default=30,
+                    help="ms between ST1 (TX on VFO-B) and the first CW of a remote message (default 30)")
     ap.add_argument("--poll", type=float, default=0.3, help="AI auto-info poll interval, seconds")
     ap.add_argument("-v", "--verbose", action="store_true", help="log every command")
     ap.add_argument("--log", metavar="FILE", help="also write the log to this file")
@@ -1056,6 +1455,11 @@ def main():
                     help=f"write the current options to FILE (default {CONFIG_NAME} next to the exe) "
                          "and exit")
     ap.add_argument("--version", action="version", version=f"vRadio {__version__}")
+    if IS_SERVER:
+        # radio 2 (VFO-B) for a remote PC: CAT on the LAN, shared WinKeyer on VSPE COM2,
+        # split only while the remote PC transmits, the local band never moves the remote VFO
+        ap.set_defaults(tcp=4532, tcp_host="0.0.0.0", auto_split=True, split_off_idle=True,
+                        winkey="COM2", dual_rx=True, follow_band=False)
 
     cfg_file, cfg_err = None, None
     if "--no-config" not in sys.argv:
@@ -1086,6 +1490,9 @@ def main():
         return
 
     a.dual_rx_cmd = a.dual_rx_cmd.strip().upper().rstrip(";") + ";"
+    for opt in ("winkey", "midi"):                     # "no" / "off" / "none" switches it off
+        if str(getattr(a, opt) or "").strip().lower() in ("no", "off", "none", "0", "false"):
+            setattr(a, opt, None)
     tray = a.tray or WINDOWED
     if tray and not a.log:
         a.log = os.path.join(APP_DIR, "vradio_log.txt")
@@ -1244,6 +1651,12 @@ def _run_core(a, stop: threading.Event, state: dict):
                              args=(server.stop, a.n1mm_udp, a.n1mm_radio), daemon=True).start()
     elif a.n1mm_udp:
         log.warning("--n1mm-udp needs --auto-split; ignored")
+    if a.winkey:
+        wk = WinkeyProxy(emu, a.winkey, a.winkey_baud, a.tcp_host, a.winkey_tcp,
+                         version=a.winkey_version, split_delay=max(0, a.winkey_split_delay) / 1000)
+        state["winkey"] = wk
+        threading.Thread(target=wk.serial_loop, args=(server.stop,), daemon=True).start()
+        threading.Thread(target=wk.tcp_loop, args=(server.stop,), daemon=True).start()
     if a.midi:
         jog = JogTuner(emu, step=max(1, a.midi_step), ccs=parse_cc_list(a.midi_cc),
                        accel=not a.midi_no_accel, learn=a.midi_learn)
@@ -1393,7 +1806,12 @@ def status_lines(a, state: dict) -> tuple[list[str], str]:
         r, color = f"Radio {a.radio}: no answer", "#c0392b"
     if isinstance(server, TcpCatServer):
         n = len(server.clients)
+        lan = sorted({ip for ip in server.peers() if not ip.startswith("127.")})
         cat = f"N1MM TCP {a.tcp}: " + (f"{n} connected" if n else "waiting")
+        if lan:
+            cat += " (LAN " + ", ".join(lan) + ")"
+        elif getattr(a, "tcp_host", "127.0.0.1") != "127.0.0.1":
+            cat += f" (open on {a.tcp_host})"
     elif isinstance(server, CatServer):
         cat = f"CAT {a.cat}: " + ("open" if server.ser else "not open")
     else:
@@ -1431,6 +1849,8 @@ def status_lines(a, state: dict) -> tuple[list[str], str]:
         lines.append(f)
     if emu is not None and emu.udp_error:
         color = "#c0392b"
+    if state.get("winkey"):
+        lines.append(state["winkey"].status())
     jog = state.get("jog")
     if getattr(a, "midi", None):
         if jog is None:
@@ -1447,6 +1867,58 @@ def status_lines(a, state: dict) -> tuple[list[str], str]:
     return lines, color
 
 
+def monitor_window(title: str = "vRadio monitor"):
+    """Traffic monitor: ticks for WinKeyer, CAT (N1MM) and radio traffic. Runs its own Tk loop
+    in this thread; closing it switches all monitoring off again."""
+    import tkinter as tk
+    from tkinter import scrolledtext
+
+    if getattr(monitor_window, "open", False):
+        return
+    monitor_window.open = True
+    root = tk.Tk()
+    root.title(title)
+    root.geometry("980x520")
+    bar = tk.Frame(root)
+    bar.pack(fill="x", padx=6, pady=4)
+    v_wk, v_cat, v_radio, v_hide = (tk.BooleanVar(value=v) for v in (True, False, False, True))
+    paused = tk.BooleanVar(value=False)
+
+    def apply():
+        MON.on.update(wk=v_wk.get(), cat=v_cat.get(), radio=v_radio.get())
+        MON.hide_polls = v_hide.get()
+
+    for text, var in (("WinKeyer", v_wk), ("CAT (N1MM)", v_cat), ("Radio COM", v_radio),
+                      ("Hide polls (IF; FA; TX; ...)", v_hide)):
+        tk.Checkbutton(bar, text=text, variable=var, command=apply).pack(side="left", padx=4)
+    tk.Checkbutton(bar, text="Pause", variable=paused).pack(side="left", padx=12)
+    box = scrolledtext.ScrolledText(root, font=("Consolas", 9), wrap="none")
+    tk.Button(bar, text="Clear", command=lambda: box.delete("1.0", "end")).pack(side="right")
+    box.pack(fill="both", expand=True, padx=6, pady=(0, 6))
+    apply()
+
+    def pump():
+        lines = MON.take()
+        if lines and not paused.get():
+            at_end = box.yview()[1] > 0.999
+            box.insert("end", "\n".join(lines) + "\n")
+            excess = int(box.index("end-1c").split(".")[0]) - 4000
+            if excess > 0:
+                box.delete("1.0", f"{excess}.0")
+            if at_end:
+                box.see("end")
+        root.after(200, pump)
+
+    def close():
+        MON.on.update(wk=False, cat=False, radio=False)
+        monitor_window.open = False
+        root.destroy()
+
+    root.protocol("WM_DELETE_WINDOW", close)
+    root.after(200, pump)
+    root.mainloop()
+
+
 def run_tray(a, stop: threading.Event, state: dict):
     import pystray
 
@@ -1458,7 +1930,7 @@ def run_tray(a, stop: threading.Event, state: dict):
         return icons[color]
 
     def line(i):
-        return lambda item: (status_lines(a, state)[0] + [""] * 8)[i]
+        return lambda item: (status_lines(a, state)[0] + [""] * 9)[i]
 
     def visible(i):
         return lambda item: len(status_lines(a, state)[0]) > i
@@ -1475,6 +1947,10 @@ def run_tray(a, stop: threading.Event, state: dict):
     def open_log(icon, item):
         if a.log and os.path.exists(a.log):
             os.startfile(a.log)
+
+    def open_monitor(icon, item):
+        threading.Thread(target=monitor_window, args=(f"vRadio {__version__} monitor",),
+                         daemon=True).start()
 
     def open_folder(icon, item):
         os.startfile(APP_DIR)
@@ -1566,8 +2042,10 @@ def run_tray(a, stop: threading.Event, state: dict):
         pystray.MenuItem(line(5), None, enabled=False, visible=visible(5)),
         pystray.MenuItem(line(6), None, enabled=False, visible=visible(6)),
         pystray.MenuItem(line(7), None, enabled=False, visible=visible(7)),
+        pystray.MenuItem(line(8), None, enabled=False, visible=visible(8)),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem(f"Copy VFO-{other} -> VFO-{own} (same band)", copy_ab),
+        pystray.MenuItem("Monitor (WinKeyer / CAT)...", open_monitor),
         pystray.MenuItem("Open log", open_log),
         pystray.MenuItem("Open vRadio folder", open_folder),
         pystray.MenuItem(f"Edit settings ({CONFIG_NAME})", edit_settings),

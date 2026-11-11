@@ -1,6 +1,18 @@
 # Changelog
 
-## Unreleased
+## Unreleased (v1.0.6)
+
+- **Two PCs on one radio** (see `SETUP_2PC.md`). Laptop 2 runs its own N1MM on VFO-B through the vRadio
+  server over the LAN (`tcp_host = 0.0.0.0`).
+- **WinKeyer proxy** (`winkey = COM2`, our side of a VSPE splitter of the WinKeyer): laptop 2's N1MM
+  gets a virtual WinKeyer on TCP 4533. Its setup commands are answered by vRadio. Only its CW
+  goes to the real keyer, with its own speed as a buffered speed change. vRadio sends `ST1;` before
+  each laptop 2 message and `ST0;` when the keyer is idle again, and keeps ST1 through break-in
+  gaps. Laptop 1's settings and speed pot are untouched. A laptop 2 message waits while laptop 1 keys.
+- **vRadioClient.exe** for laptop 2: bridges a virtual COM port (N1MM's WinKeyer) to the server,
+  and the DJ jog wheel tunes VFO-B through the server. Settings are in `vradioclient.ini`.
+- The DJ wheel no longer jumps back when N1MM or follow-band sets the frequency while you turn it.
+- Tray: LAN clients (`N1MM TCP 4532: 2 connected (LAN 192.168.1.20)`) and the WinKeyer proxy state.
 
 - `split_off_idle` is back to `no` in `vradio.example.ini`, and the README warns against it with a
   WinKeyer. In a contest on 10 Nov the WinKeyer keyed radio 2 without CAT `TX;`, so with
