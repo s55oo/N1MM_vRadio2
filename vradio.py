@@ -69,7 +69,7 @@ class TrafficMonitor:
 
 MON = TrafficMonitor()
 
-__version__ = "1.0.6"
+__version__ = "1.0.7"
 GITHUB_REPO = "s55oo/N1MM_vRadio2"
 
 # vRadioTray.exe is built without a console: then sys.stderr is None and we run in the tray.
@@ -994,9 +994,7 @@ class JogTuner:
 # vRadioDJ.exe = the same program with the DJ wheel on by default and its own settings file
 _EXE = os.path.basename(sys.executable if getattr(sys, "frozen", False) else "").lower()
 IS_DJ = _EXE.startswith("vradiodj")
-# vRadioServer.exe = the same program set up as radio 2 for a remote PC's N1MM (TCP 4532 on the LAN)
-IS_SERVER = _EXE.startswith("vradioserver")
-CONFIG_NAME = "vradiodj.ini" if IS_DJ else "vradioserver.ini" if IS_SERVER else "vradio.ini"
+CONFIG_NAME = "vradiodj.ini" if IS_DJ else "vradio.ini"
 CONFIG_SECTION = "vradio"
 # options that make no sense in a settings file
 NOT_IN_CONFIG = {"help", "version", "port", "baud", "update", "updated", "config", "no_config",
@@ -1074,6 +1072,21 @@ def save_config(ap: argparse.ArgumentParser, a, path: str):
         f.write("\n".join(lines) + "\n")
 
 
+def apply_pcs(a) -> list[str]:
+    """pcs = 2 (two PCs): radio 2 is a second PC's N1MM over the LAN. These settings belong
+    together and are forced, whatever the ini says. The DJ wheel stays on this PC (midi)."""
+    if a.pcs != 2:
+        return []
+    want = {"tcp": a.tcp or 4532, "tcp_host": "0.0.0.0", "auto_split": True, "split_off_idle": True,
+            "follow_band": False, "same_band": False, "n1mm_udp": None}
+    changed = []
+    for k, v in want.items():
+        if getattr(a, k) != v:
+            setattr(a, k, v)
+            changed.append(f"{k} = {'no' if v is False else 'yes' if v is True else 'off' if v is None else v}")
+    return changed
+
+
 def main():
     ap = Parser(
         description="Yaesu FTDX101D -> Kenwood TS-2000 CAT translator",
@@ -1082,6 +1095,10 @@ def main():
                     help="radio COM port, same as --radio (e.g. COM14)")
     ap.add_argument("baud", nargs="?", type=int, metavar="RADIO_BAUD",
                     help="radio baud, same as --radio-baud (e.g. 38400)")
+    ap.add_argument("--pcs", type=int, choices=[1, 2], default=1,
+                    help="1 = one PC: this PC's N1MM runs radio 1 and radio 2 (default). "
+                         "2 = two PCs: a second PC's N1MM is radio 2 over the LAN (TCP 4532 on "
+                         "0.0.0.0, split only during its CAT TX, follow-band off, no N1MM UDP)")
     ap.add_argument("--radio", default="COM14", help="radio port (default COM14)")
     ap.add_argument("--radio-baud", type=int, default=38400, help="radio baud (default 38400)")
     ap.add_argument("--cat", default="COM1", help="TS-2000 emulation port (default COM1)")
@@ -1148,13 +1165,6 @@ def main():
                     help=f"write the current options to FILE (default {CONFIG_NAME} next to the exe) "
                          "and exit")
     ap.add_argument("--version", action="version", version=f"vRadio {__version__}")
-    if IS_SERVER:
-        # radio 2 (VFO-B) for a remote PC: CAT on the LAN (all addresses, TCP 4532), the DJ wheel
-        # here tunes it, split only while the remote PC transmits, the local band never moves it.
-        # The WinKeyer is not handled here: the remote PC gets it from VSPE (TCP server).
-        ap.set_defaults(tcp=4532, tcp_host="0.0.0.0", auto_split=True, split_off_idle=True,
-                        midi="MP3", dual_rx=True, follow_band=False)
-
     cfg_file, cfg_err = None, None
     if "--no-config" not in sys.argv:
         cfg_file = _argv_value("--config") or os.path.join(APP_DIR, CONFIG_NAME)
@@ -1184,6 +1194,7 @@ def main():
         return
 
     a.dual_rx_cmd = a.dual_rx_cmd.strip().upper().rstrip(";") + ";"
+    pcs_changes = apply_pcs(a)
     if str(a.midi or "").strip().lower() in ("no", "off", "none", "0", "false"):
         a.midi = None                                   # "no" switches the DJ wheel off
     tray = a.tray or WINDOWED
@@ -1198,6 +1209,9 @@ def main():
                         format="%(asctime)s %(levelname)-7s %(message)s", datefmt="%H:%M:%S")
 
     log.info("vRadio %s%s", __version__, f" - settings from {a.config_file}" if a.config_file else "")
+    if a.pcs == 2:
+        log.info("Two PCs (pcs = 2): radio 2 is the other PC's N1MM over the LAN%s",
+                 " - set " + ", ".join(pcs_changes) if pcs_changes else "")
     cleanup_old_exe()
     state = {"radio": None, "emu": None, "server": None, "error": None, "args": a,
              "update": None, "relaunch": None, "parser": ap}
@@ -1504,6 +1518,8 @@ def status_lines(a, state: dict) -> tuple[list[str], str]:
     else:
         cat = "CAT: starting"
     lines = [r, cat]
+    if getattr(a, "pcs", 1) == 2:
+        lines.insert(0, "Two PCs: radio 2 = other PC over the LAN")
     if a.auto_split and a.n1mm_udp:
         if emu is None:
             u = "starting"

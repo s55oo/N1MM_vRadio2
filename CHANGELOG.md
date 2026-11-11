@@ -1,13 +1,15 @@
 # Changelog
 
-## Unreleased (v1.0.6)
+## v1.0.7 - 11 Nov 2026
 
-- **vRadioServer.exe: two PCs on one radio** (see `SETUP_2PC.md`). Laptop 2 runs its own N1MM on
-  VFO-B through vRadioServer over the LAN (TCP 4532 on all addresses). The DJ wheel on laptop 1
-  tunes VFO-B. Split only while laptop 2 transmits by CAT (`split_off_idle = yes` by default).
-  Settings are in `vradioserver.ini`. Tested on the LAN with N1MM on both laptops.
-- The WinKeyer is shared by **VSPE** (Splitter + TCP Server on laptop 1, TCP Client on laptop 2),
-  not by vRadio. The WinKeyer proxy and vRadioClient of the v1.0.6-beta were removed; old
+- **One PC or two PCs: `pcs = 1 | 2`** (see `SETUP_2PC.md`). `vRadioTray.exe` and `vRadioDJ.exe`
+  do both. `pcs = 1` (default) is the usual SO2R setup on one PC. `pcs = 2`: laptop 2 runs its own
+  N1MM on VFO-B over the LAN (TCP 4532 on 0.0.0.0, split only while laptop 2 transmits by CAT,
+  follow-band and N1MM UDP off). Tested on the LAN with N1MM on both laptops.
+- The **DJ console stays on the PC that runs vRadio** and tunes VFO-B there, also with two PCs.
+- The WinKeyer is shared by **VSPE** (Splitter COM12 => COM1,2 and TcpServer COM2:5555 on laptop 1,
+  TcpClient on laptop 2), not by vRadio. `SETUP_2PC.md` lists the VSPE and N1MM WinKeyer settings.
+  The WinKeyer proxy, vRadioServer and vRadioClient of the v1.0.6-beta were removed; old
   `winkey*` lines in an ini are ignored.
 - A client that disconnects while keying the radio releases PTT. `TX0;` is answered with `TX0;`.
 - Answers on COM14 that belong to other programs (microHAM router) are skipped.

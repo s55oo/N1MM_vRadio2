@@ -168,6 +168,7 @@ vRadio takes its port exclusively. If another program already has it, the log sa
 | Option | Effect |
 |---|---|
 | `COM5 38400` (first, no dashes) | Radio port and speed, e.g. `vRadio.exe COM5 38400 --tcp 4532 ...`. Same as `--radio COM5 --radio-baud 38400`. Default COM14 38400. |
+| `--pcs 1` / `--pcs 2` | `1` (default) = **one PC**: this PC's N1MM runs radio 1 and radio 2. `2` = **two PCs**: a second PC's N1MM is radio 2 over the LAN; sets `tcp 4532`, `tcp_host 0.0.0.0`, `auto_split`, `split_off_idle`, no `follow_band`, no `n1mm_udp`. The DJ console stays on this PC. WinKeyer sharing and N1MM settings: see `SETUP_2PC.md`. |
 | `--tcp 4532` | Serve the TS-2000 emulation on TCP 4532 instead of a COM port. |
 | `--tcp-host 0.0.0.0` | Accept TCP from other PCs (default 127.0.0.1 = this PC only). Allow vRadio.exe in the firewall. |
 | `--vfo B` | Default. N1MM's VFO-A = radio VFO-B (SUB), N1MM's VFO-B = radio VFO-A. `--vfo A` = normal mapping. |
