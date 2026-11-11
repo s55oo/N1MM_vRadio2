@@ -174,12 +174,11 @@ vRadio takes its port exclusively. If another program already has it, the log sa
 | `--follow-band` | When radio VFO-A (N1MM radio 1) changes band, VFO-B jumps to that band (`AB;`). You can still move B afterwards. N1MM itself refuses to put both radios on one band; this gets around it. |
 | `--same-band` | Copy VFO-A to VFO-B once, at startup. |
 | `--auto-split` | vRadio decides the TX VFO itself: `ST1;` = TX on VFO-B, `ST0;` = TX on VFO-A (split off). CAT `TX;` from radio 2 → TX on VFO-B. After every TX→RX the TX VFO is set again. N1MM sees radio 2 as non-split. |
-| `--winkey COM2` | Share the WinKeyer with a second PC (our side of a VSPE splitter). The second PC's N1MM sends CW through `vRadioClient.exe` and TCP 4533; vRadio sets `ST1;` around each of its messages. See `SETUP_2PC.md`. |
 | `--midi MP3` | DJ controller jog wheel tunes radio 2 (VFO-B). `vRadioDJ.exe` has it on, settings in `vradiodj.ini`. `--midi-cc 48` = left jog wheel of the Hercules DJ Control MP3 e2 (49 = right), `--midi-step 10` Hz per step, `--midi-learn` logs every MIDI message. Never tunes during TX. |
 | `--n1mm-udp 12064` | With `--auto-split`: follow N1MM's TX focus (`ActiveRadioNr`). Radio 2 focus → `ST1;`, radio 1 focus → `ST0;`. Works with WinKeyer CW too. Never switches during a transmission. While receiving, the TX VFO is checked every 0.15 s and corrected, so split can't stay on while focus is on radio 1 (v1.0.3). |
 | `--split-off-idle` | With `--auto-split` (v1.0.4): split is on **only** during radio 2's own transmission (CAT `TX;` → `ST1;`, `RX;` → `ST0;`) and off after every TX, whatever the focus, so a radio A message can never go out split. Needs N1MM to key radio 2 by CAT (PTT via radio command); otherwise the log warns. **Leave it off (`split_off_idle = no`) when a WinKeyer keys the radio**: then radio 2's CW would go out on VFO-A. |
 | `--n1mm-radio 2` | Which N1MM radio number vRadio is (default 2). |
-| `--dual-rx --dual-rx-cmd FR00;` | Keep dual receive on: every 2 s read `FR;`, re-send `FR00;` if it changed. Overrides manual toggles. |
+| `--dual-rx --dual-rx-cmd FR00;` | Keep dual receive on: 4 times a second read `FR;`, re-send `FR00;` if it changed (N1MM radio 1 switches it off when it jumps to a spot with Ctrl+Up/Down). Overrides manual toggles. |
 | `--tx-follow` | At startup set TX to the controlled VFO. Ignored with `--auto-split`. |
 | `--usb-data` / `--lsb-data` | USB/LSB from the software selects DATA-U/DATA-L (FT8 etc.). |
 | `--radio COM14 --radio-baud 38400` | Radio port (defaults shown). |
