@@ -68,6 +68,12 @@ microHAM USB Device Router 9.3.5, micro KEYER III firmware v2.12 (WinKey rev. 31
 | WinKey | **COM12** | open 115200 8N1 | VSPE Splitter source |
 | FSK, 2nd FSK, CW, 2nd PTT, Auxiliary, Control | none | | |
 
+![microHAM Router, Ports tab](docs/img/microham_ports.png)
+
+PTT tab (CW and VOICE on PTT1, PTT lead 20 ms, PTT tail 200 ms):
+
+![microHAM Router, PTT tab](docs/img/microham_ptt.png)
+
 Both CAT ports reach the same radio. The router also hands each program answers meant for the
 other one; vRadio skips answers that don't match its own query.
 
@@ -84,6 +90,8 @@ There is one WinKeyer (microKEYER, COM12) and both N1MMs use it. vRadio does not
 
 VSPE's device list then shows `Splitter: COM12 => COM1,2` (Connections 2/2) and
 `TcpServer: TCP COM2 : 5555,0` (Connections 1 when laptop 2 is connected).
+
+![VSPE on laptop 1](docs/img/vspe_laptop1.png)
 
 **VSPE on laptop 2** (start VSPE before N1MM; save the configuration):
 
@@ -107,6 +115,14 @@ VSPE's device list shows `Pair: COM1 <=> COM2` (Connections 2/2) and
 | Winkey tab (mode, weighting, sidetone, PTT lead/tail) | **identical on both laptops** | **identical on both laptops** |
 
 Laptop 1 has no radio 2 row: VFO-B belongs to laptop 2.
+
+Laptop 1, radio `Set` (COM10):
+
+![N1MM laptop 1, radio COM10](docs/img/n1mm_laptop1_radio.png)
+
+Laptop 1, WinKeyer on COM1 and its `Set`:
+
+![N1MM laptop 1, WinKeyer COM1](docs/img/n1mm_laptop1_winkeyer.png)
 
 Things to know:
 

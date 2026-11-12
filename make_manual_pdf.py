@@ -1,10 +1,12 @@
 """Builds vRadio_Manual.pdf (run: python make_manual_pdf.py)."""
+import os
+
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
-from reportlab.platypus import (KeepTogether, Paragraph, Preformatted, SimpleDocTemplate, Spacer,
-                                Table, TableStyle)
+from reportlab.platypus import (Image, KeepTogether, PageBreak, Paragraph, Preformatted, SimpleDocTemplate,
+                                Spacer, Table, TableStyle)
 
 OUT = r"C:\Ham\vRadio\vRadio_Manual.pdf"
 ACCENT = colors.HexColor("#1f4e79")
@@ -21,6 +23,8 @@ CELL = ParagraphStyle("CELL", parent=BODY, fontSize=8.5, leading=11, spaceAfter=
 CELLB = ParagraphStyle("CELLB", parent=CELL, fontName="Helvetica-Bold", textColor=colors.white)
 CODE = ParagraphStyle("CODE", fontName="Courier", fontSize=7.8, leading=10, backColor=CODEBG,
                       borderPadding=(5, 5, 5, 5), spaceBefore=4, spaceAfter=8, leftIndent=4)
+CAPTION = ParagraphStyle("CAPTION", parent=ss["Normal"], fontSize=8, textColor=colors.grey, spaceBefore=2,
+                         spaceAfter=10, alignment=1)
 BULLET = ParagraphStyle("BULLET", parent=BODY, leftIndent=12, bulletIndent=2)
 
 
@@ -50,6 +54,18 @@ def table(rows, widths):
     return t
 
 
+IMG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "docs", "img")
+
+
+def pic(name, caption, width=170 * mm):
+    """Screenshot scaled to the given width (never upscaled), with a caption under it."""
+    from reportlab.lib.utils import ImageReader
+    path = os.path.join(IMG, name)
+    w, h = ImageReader(path).getSize()
+    w_pt = min(width, w * 0.75)                     # 96 dpi screenshot -> points
+    return KeepTogether([Image(path, width=w_pt, height=h * w_pt / w), p("<i>" + caption + "</i>", CAPTION)])
+
+
 def c(t):  # inline code
     return f'<font name="Courier">{t}</font>'
 
@@ -65,12 +81,14 @@ DIAGRAM = """FTDX101D --- COM14 38400 8N1 ---> vRadio.exe --- TCP 127.0.0.1:4532
 
 story = [
     p("vRadio", H1),
-    p("Yaesu FTDX101D as a Kenwood TS-2000 for N1MM Logger+ &nbsp;|&nbsp; manual, 10 Nov 2026", SUB),
+    p("Yaesu FTDX101D as a Kenwood TS-2000 for N1MM Logger+ &nbsp;|&nbsp; manual for v1.0.7, 12 Nov 2026", SUB),
     p("vRadio connects to the FTDX101D on <b>COM14 (38400 8N1)</b> and presents the radio's "
       "<b>VFO-B (SUB)</b> to N1MM Logger+ as <b>radio 2</b>, a Kenwood TS-2000, over <b>TCP port 4532</b>. "
       "N1MM radio 1 stays on its own connection to the radio's VFO-A (MAIN)."),
     code(DIAGRAM),
-    p("<b>Status:</b> everything confirmed on air except the dual RX value (see section 8)."),
+    p("<b>One PC or two PCs:</b> " + c("pcs = 1") + " (default) = this PC's N1MM runs both radios (SO2R). "
+      + c("pcs = 2") + " = a second PC's N1MM is radio 2 over the LAN. The two-PC station setup "
+      "(microHAM, VSPE, N1MM, shared WinKeyer) with screenshots is in section 9."),
 
     p("1. Start vRadio", H2),
     p("Double-click " + c(r"dist\vRadio_TEST.bat") + ", or run the full working command (with debug log):"),
@@ -136,7 +154,7 @@ story = [
         "N1MM sees radio 2 as a plain, non-split radio.",
     ]),
     p("Dual RX", H3),
-    p("With " + c("--dual-rx") + ", vRadio reads " + c("FR;") + " every 2 s and re-sends "
+    p("With " + c("--dual-rx") + ", vRadio reads " + c("FR;") + " 4 times a second and re-sends "
       + c("--dual-rx-cmd") + " (" + c("FR00;") + ") if the radio reports something else. "
       "This overrides manual dual-RX toggles."),
 
@@ -145,6 +163,8 @@ story = [
            [c("COM5 38400") + " (first, no dashes)", "Radio port and speed, e.g. " + c("vRadio.exe COM5 38400 --tcp 4532")
             + ". Same as --radio / --radio-baud. Default COM14 38400."],
            [c("--tcp 4532"), "Serve the TS-2000 emulation on TCP 4532 instead of a COM port."],
+           [c("--pcs 1 / --pcs 2"), "1 = one PC (SO2R). 2 = two PCs: TCP 4532 on 0.0.0.0, auto split only "
+                                     "during the other PC's CAT TX, follow-band and N1MM UDP off (section 9)."],
            [c("--tcp-host 0.0.0.0"), "Accept TCP from other PCs (default 127.0.0.1 = this PC only). "
                                      "Allow vRadio.exe in Windows Firewall."],
            [c("--vfo B"), "Default. N1MM VFO-A = radio VFO-B (SUB), N1MM VFO-B = radio VFO-A. "
@@ -179,7 +199,7 @@ story = [
            [c(r"dist\update_vRadio.bat"), r"Copies dist\new\vRadio.exe over dist\vRadio.exe after a rebuild."],
            [c("vradio.py"), "Source code."],
            [c("probe_yaesu.py, test_client.py, test_tcp.py"), "Small test tools (Python)."],
-           [c("README.md, NOTES_auto_split.md"), "Documentation and background notes."],
+           [c("README.md, SETUP_2PC.md, NOTES_auto_split.md"), "Documentation, two-PC setup, background notes."],
            [c("make_manual_pdf.py"), "Builds this PDF."]],
           [70 * mm, 100 * mm]),
 
@@ -208,15 +228,51 @@ story = [
            ["TX on the wrong VFO", "Check N1MM Broadcast Data > Radio > 127.0.0.1:12064 and look for "
                                    "\"N1MM TX focus\" lines in the log."]],
           [55 * mm, 115 * mm]),
+    PageBreak(),
+    p("9. Two PCs on one FTDX101D (pcs = 2)", H2),
+    p("Laptop 1 runs vRadio (" + c("vRadioDJ.exe") + " with the DJ Control MP3 e2, or " + c("vRadioTray.exe")
+      + ") and N1MM radio 1 on VFO-A. Laptop 2's N1MM is radio 2 on VFO-B over the LAN. The DJ console is "
+      "always connected to laptop 1; its left jog wheel tunes VFO-B there."),
+    code("""Laptop 1 (vRadio)                                     Laptop 2
+  N1MM radio 1 = FTDX101D (VFO-A) - COM10
+  vRadio (pcs = 2) --- COM14 - VFO-B
+     TCP 4532  <----------------- LAN -----------------  N1MM radio = TS-2000, TCP laptop1:4532
+  VSPE: Splitter COM12 (WinKeyer) => COM1, COM2
+     COM1 = laptop 1's N1MM WinKeyer
+     TcpServer COM2 : 5555  <---- LAN -----------------  VSPE TcpClient COM2 <=> Pair <=> COM1 -> N1MM"""),
+    table([["Where", "Laptop 1 (local)", "Laptop 2 (remote)"],
+           ["vRadio ini", c("pcs = 2") + ", radio COM14, vfo B, dual_rx yes, midi MP3", "(no vRadio)"],
+           ["VSPE", "Splitter COM12 =&gt; COM1,2; TcpServer COM2 : 5555",
+            "Pair COM1 &lt;=&gt; COM2; TcpClient COM2 =&gt; laptop1:5555"],
+           ["N1MM radio", "COM10, FTDX101D (VFO-A)", "SO1V, TCP, TS-2000, laptop1:4532"],
+           ["N1MM radio Set", "PTT via Radio Command CW Mode, PTT Delay 50", "the same"],
+           ["N1MM WinKeyer", "COM1, CW/Other ticked; DTR Always On, RTS Always Off, PTT Delay 50, WinKey, VFO Nr 1",
+            "the same"],
+           ["N1MM Winkey tab", "identical on both laptops", "identical on both laptops"]],
+          [32 * mm, 69 * mm, 69 * mm]),
     Spacer(1, 6),
-    KeepTogether([
-        p("<b>Open item - confirm dual RX on site:</b>"),
-        *bullets(["Close vRadio.",
-                  "Run " + c(r"C:\Ham\vRadio\dist\radio_monitor.exe COM14 38400") + ".",
-                  "Toggle dual RX (Ctrl+Alt+D in N1MM or the radio button) and note the " + c("FR;")
-                  + " value with both sides receiving.",
-                  "If it is not " + c("FR00;") + ", use that value after " + c("--dual-rx-cmd") + "."]),
+    *bullets([
+        "Laptop 2 transmits on VFO-B because N1MM sends CAT " + c("TX;") + ": vRadio sends " + c("ST1;")
+        + ", and after " + c("RX;") + " sends " + c("ST0;") + ".",
+        "WinKeyer speed is per laptop (N1MM sends its speed with every message); mode, weighting, sidetone "
+        "and PTT lead/tail are shared, so keep the Winkey tabs identical.",
+        "Never send from both laptops at once: the N1MM multi-computer interlock must prevent it. "
+        "Esc on either laptop cuts the message being sent.",
+        "Start order: VSPE, then vRadio, then N1MM. Ports 4532 and 5555 have no password: LAN or ZeroTier only.",
     ]),
+    p("microHAM Router (laptop 1)", H3),
+    p("CAT COM10 38400 8N2 (N1MM radio 1), 2nd CAT COM14 38400 8N1 (vRadio), PTT COM11 RTS, "
+      "Foot Switch COM13 CTS, WinKey COM12 115200 8N1 (VSPE splitter source)."),
+    pic("microham_ports.png", "microHAM USB Device Router 9.3.5, micro KEYER III - Ports tab", 150 * mm),
+    pic("microham_ptt.png", "microHAM Router - PTT tab", 140 * mm),
+    p("VSPE (laptop 1)", H3),
+    pic("vspe_laptop1.png", "VSPE on laptop 1: Splitter COM12 =&gt; COM1,2 and TcpServer COM2 : 5555", 150 * mm),
+    p("N1MM (laptop 1)", H3),
+    pic("n1mm_laptop1_radio.png", "N1MM laptop 1 - radio COM10 Set: PTT via Radio Command CW Mode, PTT Delay 50",
+        80 * mm),
+    pic("n1mm_laptop1_winkeyer.png", "N1MM laptop 1 - WinKeyer on COM1 (VSPE splitter end) and its Set", 150 * mm),
+    p("Laptop 2 uses the same radio Set and WinKeyer Set; its radio row is TCP, TS-2000, laptop1:4532. "
+      "Full details and checks: " + c("SETUP_2PC.md") + "."),
 ]
 
 
