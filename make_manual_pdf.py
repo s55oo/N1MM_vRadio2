@@ -271,6 +271,7 @@ story = [
     pic("n1mm_laptop1_radio.png", "N1MM laptop 1 - radio COM10 Set: PTT via Radio Command CW Mode, PTT Delay 50",
         80 * mm),
     pic("n1mm_laptop1_winkeyer.png", "N1MM laptop 1 - WinKeyer on COM1 (VSPE splitter end) and its Set", 150 * mm),
+    pic("n1mm_winkeyer_set.png", "N1MM WinKeyer COM1 Set - the same on both laptops", 80 * mm),
     p("Laptop 2 uses the same radio Set and WinKeyer Set; its radio row is TCP, TS-2000, laptop1:4532. "
       "Full details and checks: " + c("SETUP_2PC.md") + "."),
 ]

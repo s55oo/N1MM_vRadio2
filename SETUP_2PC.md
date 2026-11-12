@@ -124,6 +124,10 @@ Laptop 1, WinKeyer on COM1 and its `Set`:
 
 ![N1MM laptop 1, WinKeyer COM1](docs/img/n1mm_laptop1_winkeyer.png)
 
+WinKeyer `Set` on COM1, the same on both laptops:
+
+![N1MM WinKeyer COM1 Set](docs/img/n1mm_winkeyer_set.png)
+
 Things to know:
 
 - **Speed is per laptop.** N1MM sends its own speed with every message (buffered speed change),
