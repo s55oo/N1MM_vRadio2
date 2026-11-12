@@ -1,0 +1,475 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>vRadio DJ mapper</title>
+<style>
+:root {
+  --bg: #f4f5f7; --card: #ffffff; --text: #1d2330; --muted: #667085; --line: #d9dde3;
+  --panel: #262b33; --panel-line: #3b424d; --free: #3a414c; --free-text: #c7cdd6;
+  --accent: #e8962e; --accent-soft: #fbead3; --accent-text: #1d2330; --sel: #4cc3ff;
+  --warn: #c0392b; --ok: #1e8e3e; --flash: #ffffff;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #15181d; --card: #1e2229; --text: #e6e9ee; --muted: #9aa3b0; --line: #333a45;
+    --panel: #0f1216; --panel-line: #2c323b; --accent-soft: #3a2c19; --accent-text: #15181d;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.4 "Segoe UI", system-ui, sans-serif; }
+header { padding: 18px 24px 6px; display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+h1 { margin: 0; font-size: 26px; }
+.sub { color: var(--muted); margin: 2px 0 0; }
+.spacer { flex: 1; }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--card); font-size: 13px; }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--warn); }
+.dot.on { background: var(--ok); }
+button { font: inherit; color: var(--text); background: var(--card); border: 1px solid var(--line);
+  border-radius: 7px; padding: 6px 12px; cursor: pointer; }
+button:hover { border-color: var(--accent); }
+button.active { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+main { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 18px; padding: 10px 24px 24px;
+  align-items: start; }
+@media (max-width: 900px) { main { grid-template-columns: 1fr; padding: 10px 16px 24px; }
+  header { padding: 14px 16px 6px; } }
+.stage { background: var(--panel); border-radius: 12px; padding: 12px; }
+.bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; color: #c7cdd6; margin-bottom: 8px; }
+.bar .seg { display: inline-flex; }
+.bar .seg button { border-radius: 0; background: #323842; color: #dfe3ea; border-color: #4a525e; }
+.bar .seg button:first-child { border-radius: 7px 0 0 7px; }
+.bar .seg button:last-child { border-radius: 0 7px 7px 0; }
+.bar .seg button.active { background: var(--accent); color: #1d2330; border-color: var(--accent); }
+.bar label { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
+svg { width: 100%; height: auto; display: block; user-select: none; }
+.ctl { cursor: pointer; }
+.ctl .body { fill: var(--free); stroke: #555e6b; stroke-width: 2; transition: fill .15s; }
+.ctl.assigned .body { fill: var(--accent); stroke: #f3b25f; }
+.ctl.selected .body { stroke: var(--sel); stroke-width: 5; }
+.ctl.flash .body { fill: var(--flash); }
+.ctl text { pointer-events: none; }
+.face { fill: #1d2330; font-weight: 600; font-size: 17px; text-anchor: middle; dominant-baseline: central; }
+.ctl:not(.assigned) .face { fill: var(--free-text); }
+.fnlabel { fill: #f0c38a; font-size: 18px; font-weight: 600; text-anchor: middle; }
+.ctl:not(.assigned) .fnlabel { fill: #7d8693; font-weight: 400; }
+.caption { fill: #7d8693; font-size: 13px; text-anchor: middle; letter-spacing: .05em; }
+.section { fill: none; stroke: var(--panel-line); stroke-width: 2; }
+.deck { fill: #5d6573; font-size: 54px; text-anchor: middle; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+.side h2 { margin: 0 0 2px; font-size: 19px; }
+.muted { color: var(--muted); }
+.mono { font-family: Consolas, monospace; }
+.current { margin: 14px 0; padding: 10px 12px; border-radius: 9px; background: var(--accent-soft);
+  border: 1px solid var(--accent); }
+.current.free { background: transparent; border-style: dashed; border-color: var(--line); }
+.current b { display: block; }
+input[type=search] { width: 100%; font: inherit; padding: 8px 10px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--bg); color: var(--text); margin: 10px 0 8px; }
+.fnlist { max-height: 440px; overflow: auto; border: 1px solid var(--line); border-radius: 9px; }
+.grp { padding: 6px 10px; font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--muted); background: var(--bg); position: sticky; top: 0; }
+.fn { padding: 8px 10px; border-top: 1px solid var(--line); cursor: pointer; display: flex; gap: 8px; }
+.fn:hover { background: var(--accent-soft); }
+.fn.cur { background: var(--accent-soft); font-weight: 600; }
+.fn small { margin-left: auto; color: var(--muted); }
+.tx { color: var(--warn); }
+.lower { padding: 0 24px 30px; display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 18px; }
+@media (max-width: 900px) { .lower { grid-template-columns: 1fr; padding: 0 16px 24px; } }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+td, th { text-align: left; padding: 5px 6px; border-top: 1px solid var(--line); }
+th { color: var(--muted); font-weight: 600; border-top: 0; }
+tr.click { cursor: pointer; }
+tr.click:hover td { background: var(--accent-soft); }
+.log { font-family: Consolas, monospace; font-size: 12px; max-height: 260px; overflow: auto; }
+.err { color: var(--warn); }
+.saved { color: var(--ok); font-size: 13px; margin: 0 0 8px; }
+button:disabled { opacity: .45; cursor: default; border-color: var(--line); }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>DJ Control MP3 e2 → FTDX101D VFO-B</h1>
+    <p class="sub">Click a control, or touch it on the controller, then pick what it does on VFO-B.
+      Changes apply at once and are saved by vRadio.</p>
+  </div>
+  <div class="spacer"></div>
+  <span class="chip"><span id="dot" class="dot"></span><span id="dev">connecting…</span></span>
+</header>
+
+<main>
+  <section class="stage">
+    <div class="bar">
+      <span>Number keys show:</span>
+      <span class="seg"><button id="bank-loop" class="active">Keys 1–4</button><button id="bank-fx">Keys 5–8 (Fx lit)</button></span>
+      <span class="spacer"></span>
+      <label title="While on, touching a control selects it here and the radio is not changed.">
+        <input type="checkbox" id="touch" checked> Select by touching the controller (radio paused)</label>
+    </div>
+    <svg id="svg" viewBox="0 0 1300 900" aria-label="DJ controller"></svg>
+  </section>
+
+  <aside class="card side" id="side">
+    <h2 id="s-name">Pick a control</h2>
+    <div class="muted" id="s-kind">Click a control in the picture, or touch it on the controller.</div>
+    <div id="s-body" hidden>
+      <div class="mono muted" id="s-midi"></div>
+      <div class="current" id="s-cur"></div>
+      <button id="unassign">Unassign</button>
+      <input type="search" id="search" placeholder="Search functions (e.g. NB, mode, notch)">
+      <div class="fnlist" id="fnlist"></div>
+    </div>
+  </aside>
+</main>
+
+<div class="lower">
+  <section class="card">
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+      <h2 style="margin:0;font-size:17px">Assignments</h2>
+      <span class="muted" id="count"></span>
+      <span class="spacer" style="flex:1"></span>
+      <button id="picture" title="Download a JPG of the controller with your functions">Save picture (JPG)</button>
+      <button id="undo" title="Bring back the layout from before the last Load starter / Clear all / Undo">Undo</button>
+      <button id="starter">Load VFO-B starter layout</button>
+      <button id="clear">Clear all</button>
+    </div>
+    <div class="saved" id="saved">Every change is saved automatically.</div>
+    <table><thead><tr><th>Control</th><th>MIDI</th><th>Function on VFO-B</th></tr></thead>
+      <tbody id="rows"></tbody></table>
+  </section>
+  <section class="card">
+    <h2 style="margin:0 0 6px;font-size:17px">Controller activity</h2>
+    <div class="muted" style="margin-bottom:6px">Last MIDI messages (status, number, value).</div>
+    <div class="log" id="log"></div>
+  </section>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const NS = "http://www.w3.org/2000/svg";
+let layout, fns = [], fnById = {}, starter = {}, mapping = {}, selected = null, bank = "loop", seq = 0;
+const nodes = {};
+
+async function api(path, body) {
+  const r = await fetch(path, body === undefined ? {} :
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || r.status);
+  return j;
+}
+function el(tag, attrs, parent) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(e);
+  return e;
+}
+const KIND = { button: "Button: sends a press", absolute: "Fader / knob: sends a position 0–127",
+  encoder: "Endless wheel: sends a step left or right" };
+const midiText = c => (c.message === "note" ? "Note " : "Control Change ") +
+  "0x" + c.number.toString(16).toUpperCase().padStart(2, "0") + " (" + c.number + ")";
+
+function draw() {
+  const svg = $("svg");
+  svg.innerHTML = "";
+  el("rect", { x: 10, y: 10, width: 1280, height: 880, rx: 26, fill: "none", stroke: "#3b424d", "stroke-width": 2 }, svg);
+  for (const s of layout.sections)
+    el("rect", { class: "section", x: s.x - s.w / 2, y: s.y - s.h / 2, width: s.w, height: s.h, rx: 12 }, svg);
+  el("line", { x1: 446, y1: 40, x2: 446, y2: 860, stroke: "#3b424d", "stroke-width": 2 }, svg);
+  el("line", { x1: 854, y1: 40, x2: 854, y2: 860, stroke: "#3b424d", "stroke-width": 2 }, svg);
+  el("text", { class: "deck", x: 70, y: 470 }, svg).textContent = "A";
+  el("text", { class: "deck", x: 1230, y: 470 }, svg).textContent = "B";
+  for (const b of layout.bankSwitches) {
+    el("rect", { x: b.x - b.w / 2, y: b.y - b.h / 2, width: b.w, height: b.h, rx: 6, fill: "#323842",
+      stroke: "#4a525e", "stroke-dasharray": "4 3" }, svg);
+    const t = el("text", { class: "face", x: b.x, y: b.y, style: "fill:#c7cdd6;font-size:14px" }, svg);
+    t.textContent = b.label;
+  }
+  for (const c of layout.controls) {
+    const g = el("g", { class: "ctl", "data-id": c.id }, svg);
+    g.addEventListener("click", () => select(c.id, false));
+    let top;
+    if (c.shape === "jog") {
+      el("circle", { class: "body", cx: c.x, cy: c.y, r: c.r }, g);
+      el("circle", { cx: c.x, cy: c.y, r: c.r * 0.6, fill: "none", stroke: "#00000033", "stroke-width": 2 }, g);
+      el("circle", { cx: c.x, cy: c.y, r: 6, fill: "#00000066" }, g);
+      el("text", { class: "face", x: c.x, y: c.y + c.r * 0.8 }, g).textContent = "JOG";
+      top = c.y - c.r - 12;
+    } else if (c.shape === "knob") {
+      el("circle", { class: "body", cx: c.x, cy: c.y, r: c.r }, g);
+      el("line", { x1: c.x, y1: c.y - c.r + 5, x2: c.x, y2: c.y - c.r / 3, stroke: "#1d2330", "stroke-width": 4,
+        "stroke-linecap": "round" }, g);
+      if (c.caption) el("text", { class: "caption", x: c.x, y: c.y + c.r + 20 }, g).textContent = c.caption;
+      top = c.y - c.r - 10;
+    } else if (c.shape === "fader") {
+      // y is the top of the fader track (as in the MP3e2_to_AetherSDR layout)
+      el("rect", { x: c.x - 4, y: c.y, width: 8, height: c.length, rx: 4, fill: "#11151a" }, g);
+      el("rect", { class: "body", x: c.x - 22, y: c.y + c.length * 0.3 - 14, width: 44, height: 28, rx: 5 }, g);
+      el("rect", { x: c.x - 30, y: c.y - 6, width: 60, height: c.length + 12, fill: "transparent" }, g);
+      if (c.caption) el("text", { class: "caption", x: c.x, y: c.y + c.length + 24 }, g).textContent = c.caption;
+      top = c.y - 14;
+    } else if (c.shape === "crossfader") {
+      el("rect", { x: c.x - c.length / 2, y: c.y - 4, width: c.length, height: 8, rx: 4, fill: "#11151a" }, g);
+      el("rect", { class: "body", x: c.x - 14, y: c.y - 22, width: 28, height: 44, rx: 5 }, g);
+      el("rect", { x: c.x - c.length / 2, y: c.y - 26, width: c.length, height: 52, fill: "transparent" }, g);
+      top = c.y - 34;
+    } else {
+      el("rect", { class: "body", x: c.x - c.w / 2, y: c.y - c.h / 2, width: c.w, height: c.h,
+        rx: c.shape === "key" ? 6 : 8 }, g);
+      el("text", { class: "face", x: c.x, y: c.y }, g).textContent = c.label || "";
+      top = c.y - c.h / 2 - 9;
+    }
+    const lab = el("text", { class: "fnlabel", x: c.x, y: top }, g);
+    if (c.shape === "jog") lab.setAttribute("y", c.y - c.r - 14);
+    nodes[c.id] = { g, lab, c };
+  }
+  refresh();
+}
+
+function refresh() {
+  for (const id in nodes) {
+    const { g, lab, c } = nodes[id];
+    const fid = mapping[id];
+    g.classList.toggle("assigned", !!fid);
+    g.classList.toggle("selected", id === selected);
+    g.style.display = c.bank && c.bank !== bank ? "none" : "";
+    lab.textContent = fid ? (fnById[fid] || {}).short || fid : "—";
+  }
+  $("bank-loop").classList.toggle("active", bank === "loop");
+  $("bank-fx").classList.toggle("active", bank === "fx");
+  side();
+  table();
+}
+
+function side() {
+  const c = selected && nodes[selected] && nodes[selected].c;
+  $("s-body").hidden = !c;
+  if (!c) return;
+  $("s-name").textContent = c.name;
+  $("s-kind").textContent = KIND[c.kind] || c.kind;
+  $("s-midi").textContent = "MIDI  " + midiText(c);
+  const fid = mapping[c.id], f = fnById[fid];
+  const cur = $("s-cur");
+  cur.className = "current" + (f ? "" : " free");
+  cur.innerHTML = f ? "<b></b><span class='muted'></span>" : "<span class='muted'>Free: does nothing.</span>";
+  if (f) { cur.querySelector("b").textContent = f.label; cur.querySelector("span").textContent = f.group; }
+  $("unassign").disabled = !f;
+  const q = $("search").value.trim().toLowerCase();
+  const list = $("fnlist");
+  list.innerHTML = "";
+  let group = null, n = 0;
+  for (const fn of fns) {
+    if (fn.kind !== c.kind) continue;
+    if (q && !(fn.label + " " + fn.group + " " + fn.short).toLowerCase().includes(q)) continue;
+    if (fn.group !== group) {
+      group = fn.group;
+      const h = document.createElement("div");
+      h.className = "grp" + (group.startsWith("Transmit") ? " tx" : "");
+      h.textContent = group;
+      list.appendChild(h);
+    }
+    const row = document.createElement("div");
+    row.className = "fn" + (fn.id === fid ? " cur" : "");
+    row.textContent = fn.label;
+    const used = Object.keys(mapping).filter(k => mapping[k] === fn.id && k !== c.id);
+    if (used.length) {
+      const s = document.createElement("small");
+      s.textContent = "also " + used.map(k => nodes[k].c.name.replace("Deck ", "")).join(", ");
+      row.appendChild(s);
+    }
+    row.addEventListener("click", () => assign(c.id, fn.id));
+    list.appendChild(row);
+    n++;
+  }
+  if (!n) list.innerHTML = "<div class='fn muted'>No function fits this control.</div>";
+}
+
+function table() {
+  const rows = $("rows");
+  rows.innerHTML = "";
+  const ids = layout.controls.map(c => c.id).filter(id => mapping[id]);
+  $("count").textContent = ids.length + " of " + layout.controls.length + " controls assigned";
+  for (const id of ids) {
+    const c = nodes[id].c, tr = document.createElement("tr");
+    tr.className = "click";
+    for (const t of [c.name, midiText(c), (fnById[mapping[id]] || {}).label || mapping[id]]) {
+      const td = document.createElement("td"); td.textContent = t; tr.appendChild(td);
+    }
+    tr.addEventListener("click", () => select(id, true));
+    rows.appendChild(tr);
+  }
+}
+
+function select(id, fromOutside) {
+  const c = nodes[id] && nodes[id].c;
+  if (!c) return;
+  selected = id;
+  if (c.bank) bank = c.bank;
+  $("search").value = "";
+  refresh();
+  if (fromOutside) $("side").scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+
+async function assign(cid, fid) {
+  try {
+    const st = await api("/api/assign", { control: cid, function: fid });
+    mapping = st.mapping;
+    saved(st);
+    refresh();
+  } catch (e) { alert("Not saved: " + e.message); }
+}
+
+function flash(id) {
+  const n = nodes[id];
+  if (!n) return;
+  n.g.classList.add("flash");
+  clearTimeout(n.t);
+  n.t = setTimeout(() => n.g.classList.remove("flash"), 160);
+}
+
+function saved(st) {
+  $("undo").disabled = !st.undo;
+  const t = st.savedAt ? new Date(st.savedAt * 1000).toLocaleTimeString() : null;
+  $("saved").textContent = "✓ Every change is saved automatically" +
+    (st.mapFile ? " in " + st.mapFile : "") + (t ? " · last saved " + t : " · nothing changed yet (starter layout)");
+}
+
+function status(st) {
+  saved(st);
+  $("dot").classList.toggle("on", !!st.device);
+  $("dev").textContent = st.device ? st.device + " · step " + st.step + " Hz" + (st.locked ? " · wheel locked" : "")
+    : "controller " + (st.deviceError || "not connected");
+}
+
+async function poll() {
+  try {
+    const st = await api("/api/state?after=" + seq);
+    status(st);
+    if (JSON.stringify(st.mapping) !== JSON.stringify(mapping)) { mapping = st.mapping; refresh(); }
+    for (const [s, id, txt] of st.events) {
+      flash(id);
+      const line = document.createElement("div");
+      line.textContent = txt + "  " + nodes[id].c.name;
+      $("log").prepend(line);
+      while ($("log").childElementCount > 60) $("log").lastChild.remove();
+    }
+    if (st.events.length && $("touch").checked) {
+      const last = st.events[st.events.length - 1][1];
+      if (last !== selected) select(last, false);
+    }
+    seq = st.seq;
+  } catch (e) {
+    $("dot").classList.remove("on");
+    $("dev").textContent = "vRadioDJ is not running";
+  }
+  setTimeout(poll, 250);
+}
+
+async function heartbeat() {
+  try { await api("/api/select", { on: $("touch").checked && !document.hidden }); } catch (e) {}
+  setTimeout(heartbeat, 1000);
+}
+
+$("bank-loop").onclick = () => { bank = "loop"; refresh(); };
+$("bank-fx").onclick = () => { bank = "fx"; refresh(); };
+$("touch").onchange = () => api("/api/select", { on: $("touch").checked }).catch(() => {});
+$("unassign").onclick = () => selected && assign(selected, null);
+$("search").oninput = side;
+async function replaceAll(path, body) {
+  const st = await api(path, body);
+  mapping = st.mapping; saved(st); refresh();
+}
+$("starter").onclick = () => {
+  if (!confirm("Replace YOUR assignments with the VFO-B starter layout?\n\n" +
+    "You don't need this to load your own layout: it is saved and used automatically.\n" +
+    "Undo brings yours back.")) return;
+  replaceAll("/api/mapping", { map: starter });
+};
+$("clear").onclick = () => {
+  if (!confirm("Clear all assignments? The controller does nothing until you assign functions.\nUndo brings them back.")) return;
+  replaceAll("/api/mapping", { map: {} });
+};
+// --- Save picture (JPG): the controller with the enabled functions and a list under it ---
+const PIC_CSS = `
+  .body { fill: #343a44; stroke: #4a525e; stroke-width: 2; }
+  .assigned .body { fill: #e8962e; stroke: #f3b25f; }
+  text { font-family: "Segoe UI", "Segoe UI Symbol", system-ui, sans-serif; }
+  .face { fill: #1d2330; font-weight: 600; font-size: 17px; text-anchor: middle; dominant-baseline: central; }
+  .ctl:not(.assigned) .face { fill: #8a929e; }
+  .fnlabel { fill: #f0c38a; font-size: 18px; font-weight: 600; text-anchor: middle; }
+  .ctl:not(.assigned) .fnlabel { display: none; }
+  .caption { fill: #7d8693; font-size: 13px; text-anchor: middle; letter-spacing: .05em; }
+  .section { fill: none; stroke: #3b424d; stroke-width: 2; }
+  .deck { fill: #5d6573; font-size: 54px; text-anchor: middle; }`;
+
+async function savePicture() {
+  const S = 2, W = 1300 * S, TOP = 150, PH = 900 * S;
+  const ids = layout.controls.map(c => c.id).filter(id => mapping[id]);
+  const rows = Math.ceil(ids.length / 2), H = TOP + PH + 140 + rows * 64 + 60;
+  // the picture shows keys 1-4 (or 5-8 if only those are used); the list names them all
+  const fxOnly = ids.some(id => nodes[id].c.bank === "fx") && !ids.some(id => nodes[id].c.bank === "loop");
+  const clone = $("svg").cloneNode(true);
+  clone.setAttribute("xmlns", NS);
+  clone.setAttribute("width", W); clone.setAttribute("height", PH);
+  clone.querySelectorAll(".ctl").forEach(g => {
+    g.classList.remove("selected", "flash");
+    const c = nodes[g.dataset.id].c;
+    g.style.display = c.bank && c.bank !== (fxOnly ? "fx" : "loop") ? "none" : "";
+  });
+  const st = document.createElementNS(NS, "style"); st.textContent = PIC_CSS; clone.prepend(st);
+  const url = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(clone)],
+    { type: "image/svg+xml;charset=utf-8" }));
+  const img = new Image();
+  await new Promise((ok, bad) => { img.onload = ok; img.onerror = bad; img.src = url; });
+  const cv = document.createElement("canvas"); cv.width = W; cv.height = H;
+  const g = cv.getContext("2d");
+  const font = (px, bold) => (bold ? "600 " : "") + px + 'px "Segoe UI", system-ui, sans-serif';
+  g.fillStyle = "#f4f5f7"; g.fillRect(0, 0, W, H);
+  g.fillStyle = "#1d2330"; g.font = font(56, true); g.textBaseline = "top";
+  g.fillText("DJ Control MP3 e2  →  FTDX101D VFO-B", 60, 30);
+  g.fillStyle = "#667085"; g.font = font(30);
+  g.fillText("vRadioDJ mapping · " + ids.length + " functions · " + new Date().toLocaleDateString(), 62, 100);
+  g.fillStyle = "#262b33"; g.beginPath(); g.roundRect(20, TOP, W - 40, PH - 10, 40); g.fill();
+  g.drawImage(img, 0, TOP, W, PH);
+  URL.revokeObjectURL(url);
+  let y = TOP + PH + 60;
+  g.fillStyle = "#1d2330"; g.font = font(44, true); g.fillText("Enabled functions", 60, y);
+  const sorted = ids.map(id => nodes[id].c).sort((a, b) => a.name.localeCompare(b.name));
+  sorted.forEach((c, i) => {
+    const x = 60 + Math.floor(i / rows) * (W - 120) / 2, yy = y + 80 + (i % rows) * 64;
+    g.fillStyle = "#e8962e"; g.beginPath(); g.arc(x + 11, yy + 22, 11, 0, 7); g.fill();
+    g.fillStyle = "#1d2330"; g.font = font(32, true); g.fillText(c.name, x + 40, yy);
+    g.font = font(32); g.fillText((fnById[mapping[c.id]] || {}).label || mapping[c.id], x + 470, yy);
+  });
+  const blob = await new Promise(ok => cv.toBlob(ok, "image/jpeg", 0.92));
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = "vRadioDJ_mapping.jpg";
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+$("picture").onclick = () => savePicture().catch(e => alert("Picture failed: " + e.message));
+$("undo").onclick = () => replaceAll("/api/undo", {}).catch(e => alert(e.message));
+window.addEventListener("pagehide", () => navigator.sendBeacon &&
+  fetch("/api/select", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ on: false }), keepalive: true }));
+
+(async () => {
+  try {
+    layout = await api("/api/layout");
+    const f = await api("/api/functions");
+    fns = f.functions; starter = f.starter;
+    for (const fn of fns) fnById[fn.id] = fn;
+    const st = await api("/api/state?after=0");
+    mapping = st.mapping; seq = st.seq; status(st);
+    draw();
+    poll();
+    heartbeat();
+  } catch (e) {
+    $("dev").textContent = "cannot reach vRadioDJ: " + e.message;
+  }
+})();
+</script>
+</body>
+</html>

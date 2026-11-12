@@ -81,7 +81,7 @@ DIAGRAM = """FTDX101D --- COM14 38400 8N1 ---> vRadio.exe --- TCP 127.0.0.1:4532
 
 story = [
     p("vRadio", H1),
-    p("Yaesu FTDX101D as a Kenwood TS-2000 for N1MM Logger+ &nbsp;|&nbsp; manual for v1.0.7, 12 Nov 2026", SUB),
+    p("Yaesu FTDX101D as a Kenwood TS-2000 for N1MM Logger+ &nbsp;|&nbsp; manual for v1.0.8, 12 Nov 2026", SUB),
     p("vRadio connects to the FTDX101D on <b>COM14 (38400 8N1)</b> and presents the radio's "
       "<b>VFO-B (SUB)</b> to N1MM Logger+ as <b>radio 2</b>, a Kenwood TS-2000, over <b>TCP port 4532</b>. "
       "N1MM radio 1 stays on its own connection to the radio's VFO-A (MAIN)."),
@@ -199,7 +199,7 @@ story = [
            [c(r"dist\update_vRadio.bat"), r"Copies dist\new\vRadio.exe over dist\vRadio.exe after a rebuild."],
            [c("vradio.py"), "Source code."],
            [c("probe_yaesu.py, test_client.py, test_tcp.py"), "Small test tools (Python)."],
-           [c("README.md, SETUP_2PC.md, NOTES_auto_split.md"), "Documentation, two-PC setup, background notes."],
+           [c("README.md, SETUP_2PC.md, DJ_CONTROLS.md"), "Documentation, two-PC setup, DJ controller mapping."],
            [c("make_manual_pdf.py"), "Builds this PDF."]],
           [70 * mm, 100 * mm]),
 
@@ -274,6 +274,33 @@ story = [
     pic("n1mm_winkeyer_set.png", "N1MM WinKeyer COM1 Set - the same on both laptops", 80 * mm),
     p("Laptop 2 uses the same radio Set and WinKeyer Set; its radio row is TCP, TS-2000, laptop1:4532. "
       "Full details and checks: " + c("SETUP_2PC.md") + "."),
+
+    PageBreak(),
+    p("10. DJ controller mapping (vRadioDJ)", H2),
+    p("Every button, knob, fader and wheel of the Hercules DJ Control MP3 e2 can control VFO-B. "
+      "Open the mapper page from the tray (<i>DJ controller mapping...</i>) or at "
+      + c("http://127.0.0.1:8065/") + " on the PC that runs vRadioDJ."),
+    *bullets([
+        "Click a control in the picture, or touch it on the controller (with <i>Select by touching the "
+        "controller</i> ticked, the radio stays untouched while the page is open).",
+        "Pick its function. The list offers only what fits: buttons get on/off and step functions, faders "
+        "and knobs get levels, endless wheels get tune, filter width, IF shift and notch frequency.",
+        "It applies at once and is saved in " + c("vradiodj_midi.json") + ". There is no Save button.",
+        "<i>Load VFO-B starter layout</i> and <i>Clear all</i> first back up your layout to "
+        + c("vradiodj_midi.bak.json") + "; <i>Undo</i> brings it back.",
+        "<i>Save picture (JPG)</i> downloads a picture like the one below.",
+    ]),
+    table([["Group", "Functions on VFO-B"],
+           ["Tuning", "tune (wheel), step down/up, lock wheel, +/-1 MHz, +/-1 kHz, band up/down, copy A to B"],
+           ["Mode", "mode down/up, LSB, USB, CW-U, CW-L, AM, FM, RTTY-L/U, DATA-L/U"],
+           ["Audio / receive", "AF gain, mute, RF gain, squelch level and on/off, AGC, IPO/AMP, attenuator"],
+           ["Filter / noise", "narrower/wider, width, IF shift, NB, NR, NR level, DNF, manual notch and frequency"],
+           ["Transmit on VFO-B", "MOX (off by itself after 60 s), ATU tune; refused while already transmitting"]],
+          [40 * mm, 130 * mm]),
+    Spacer(1, 6),
+    p("Settings in " + c("vradiodj.ini") + ": " + c("dj_web_port = 8065") + "; " + c("midi_no_buttons = yes")
+      + " keeps only the jog wheel. Details: " + c("DJ_CONTROLS.md") + "."),
+    pic("dj_mapping_example.jpg", "Save picture (JPG): an example mapping with 12 functions", 150 * mm),
 ]
 
 

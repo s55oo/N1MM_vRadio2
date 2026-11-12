@@ -1,5 +1,24 @@
 # Changelog
 
+## v1.0.8 - 12 Nov 2026
+
+- **DJ mapper page** in vRadioDJ (`http://127.0.0.1:8065/`, tray: *DJ controller mapping...*):
+  a picture of the DJ Control MP3 e2 (layout from MP3e2_to_AetherSDR). Click a control, or touch
+  it on the controller, and pick its VFO-B function. Applies at once, saved in
+  `vradiodj_midi.json`. All buttons, knobs, faders and both wheels can be used. See
+  `DJ_CONTROLS.md`.
+- Functions, all on VFO-B: tune (either wheel), tune step, wheel lock, +/-1 MHz and kHz, band
+  up/down, copy A->B, mode up/down and each mode, AF gain, mute, RF gain, squelch level and on/off,
+  AGC, IPO/AMP, attenuator, filter width, IF shift, NB, NR and NR level, DNF, manual notch and its
+  frequency, MOX (switches itself off after 60 s) and ATU tune. Nothing that changes the whole
+  radio (power, mic gain, VOX...).
+- *Select by touching the controller*: touching a control selects it on the page and the radio
+  stays untouched while the page is open.
+- **Load VFO-B starter layout** (the AetherSDR starter translated to VFO-B) and **Clear all** first
+  back up your layout to `vradiodj_midi.bak.json`; **Undo** brings it back.
+- **Save picture (JPG)**: the controller with your functions on it and the full list under it.
+- `dj_web_port` (default 8065) and `midi_no_buttons` (jog wheel only) settings.
+
 ## v1.0.7 - 11 Nov 2026
 
 - **One PC or two PCs: `pcs = 1 | 2`** (see `SETUP_2PC.md`). `vRadioTray.exe` and `vRadioDJ.exe`

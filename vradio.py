@@ -13,6 +13,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import socket
@@ -69,7 +70,7 @@ class TrafficMonitor:
 
 MON = TrafficMonitor()
 
-__version__ = "1.0.7"
+__version__ = "1.0.8"
 GITHUB_REPO = "s55oo/N1MM_vRadio2"
 
 # vRadioTray.exe is built without a console: then sys.stderr is None and we run in the tray.
@@ -884,10 +885,19 @@ class JogTuner:
         self.freq: int | None = None        # cached frequency while turning
         self.gen = -1                       # emu.freq_gen when self.freq was read
         self.target = f"VFO-{emu.ymap['A']}" if emu is not None else "VFO"
+        self.locked = False                 # Scratch button: wheel locked
+        self.controls: "DjControls | None" = None   # buttons, knobs, faders (DJ mapper page)
 
     def ticks_from(self, status: int, d1: int, d2: int) -> int:
         if self.learn:
             log.info("MIDI %02X %02X %02X  (status, controller/note, value)", status, d1, d2)
+        if self.controls:
+            # buttons, knobs and faders: the mapping decides; tuning = controls mapped to "tune"
+            self.controls.touched(status, d1, d2)
+            if status & 0xF0 == 0xB0 and d1 in self.ccs:
+                return 0 if self.controls.selecting else jog_delta(d2)
+            self.controls.event(status, d1, d2)
+            return 0
         if status & 0xF0 != 0xB0:            # control change only
             return 0
         if self.ccs and d1 not in self.ccs:
@@ -906,7 +916,7 @@ class JogTuner:
     def apply(self, ticks: int):
         """Move our VFO by ticks * step (never while transmitting)."""
         emu = self.emu
-        if not ticks or emu.transmitting or emu.cat_tx:
+        if not ticks or emu.transmitting or emu.cat_tx or self.locked:
             return
         y = emu.ymap["A"]                    # radio VFO letter vRadio controls (B = SUB)
         with emu.lock:
@@ -949,8 +959,10 @@ class JogTuner:
                         if midi.open(want, self.events):
                             self.skip_connect_dump(stop)
                             self.device, self.error = midi.name, None
-                            log.info("DJ wheel: '%s' connected - jog tunes %s, %d Hz per step",
-                                     midi.name, self.target, self.step)
+                            log.info("DJ wheel: '%s' connected - jog tunes %s, %d Hz per step%s",
+                                     midi.name, self.target, self.step,
+                                     "; buttons, knobs and faders follow the DJ mapper page"
+                                     if self.controls else "")
                         elif self.error != "not found":
                             self.error = "not found"
                             log.warning("DJ wheel: no MIDI device matching '%s' (found: %s) - "
@@ -985,8 +997,560 @@ class JogTuner:
                 self.apply(ticks)
             except (RadioError, ValueError) as e:
                 log.debug("jog: %s", e)
+            if self.controls:
+                self.controls.flush()
         if midi:
             midi.close()
+
+# ---------------------------------------------------------------------------
+# DJ controller buttons, knobs and faders -> FTDX101D VFO-B (SUB receiver)
+# What each control does is set in the browser (DJ mapper page, see DjWebServer) and saved in
+# vradiodj_midi.json. The controller's picture and MIDI numbers come from
+# dj_layout_mp3e2.json (from github.com/s55oo/MP3e2_to_AetherSDR). Only VFO-B functions:
+# nothing that changes the whole radio (RF power, mic gain, VOX, ...).
+# Notes send 127 on press / 0 on release; faders 0..127; jog wheels and pitch knobs are
+# endless (1 = right, 127 = left).
+# ---------------------------------------------------------------------------
+YAESU_MODES = [("1", "LSB"), ("2", "USB"), ("3", "CW-U"), ("7", "CW-L"), ("5", "AM"), ("4", "FM"),
+               ("6", "RTTY-L"), ("9", "RTTY-U"), ("8", "DATA-L"), ("C", "DATA-U")]
+JOG_STEPS = [1, 5, 10, 20, 50, 100, 500]
+DJ_TX_LIMIT = 60                                    # MOX switches itself off after this many s
+DJ_MAP_NAME = "vradiodj_midi.json"
+DJ_LAYOUT_NAME = "dj_layout_mp3e2.json"
+
+
+def _fn(fid, label, group, kind, act, arg=None, short=None):
+    return {"id": fid, "label": label, "group": group, "kind": kind, "act": act, "arg": arg,
+            "short": short or label}
+
+
+# kind: "button" (press), "absolute" (fader / knob 0..127), "encoder" (endless wheel / knob)
+DJ_FUNCTIONS = [
+    _fn("tune", "Tune VFO-B", "Tuning", "encoder", "tune", short="VFO-B tune"),
+    _fn("step_down", "Tune step down", "Tuning", "button", "step", -1, "Step -"),
+    _fn("step_up", "Tune step up", "Tuning", "button", "step", +1, "Step +"),
+    _fn("tune_lock", "Lock tuning wheel", "Tuning", "button", "lock", short="Lock"),
+    _fn("mhz_down", "VFO-B -1 MHz", "Tuning", "button", "mhz", -1, "-1 MHz"),
+    _fn("mhz_up", "VFO-B +1 MHz", "Tuning", "button", "mhz", +1, "+1 MHz"),
+    _fn("khz_down", "VFO-B -1 kHz", "Tuning", "button", "khz", -1, "-1 kHz"),
+    _fn("khz_up", "VFO-B +1 kHz", "Tuning", "button", "khz", +1, "+1 kHz"),
+    _fn("band_up", "Band up", "Tuning", "button", "band", "BU", "Band ▲"),
+    _fn("band_down", "Band down", "Tuning", "button", "band", "BD", "Band ▼"),
+    _fn("copy_ab", "Copy VFO-A -> VFO-B", "Tuning", "button", "copy_ab", short="A→B"),
+    _fn("mode_down", "Mode down", "Mode", "button", "mode", -1, "Mode -"),
+    _fn("mode_up", "Mode up", "Mode", "button", "mode", +1, "Mode +"),
+    *[_fn("mode_" + n.lower().replace("-", ""), "Mode " + n, "Mode", "button", "setmode", c, n)
+      for c, n in YAESU_MODES],
+    _fn("af_gain", "AF gain", "Audio", "absolute", "level", ("AG", 0, 255), "AF gain"),
+    _fn("mute", "Mute on/off", "Audio", "button", "mute", short="Mute"),
+    _fn("rf_gain", "RF gain", "Receive", "absolute", "level", ("RG", 0, 255), "RF gain"),
+    _fn("squelch", "Squelch level", "Receive", "absolute", "level", ("SQ", 0, 100), "Squelch"),
+    _fn("squelch_onoff", "Squelch on/off", "Receive", "button", "squelch_onoff", short="SQL on"),
+    _fn("agc_cycle", "AGC cycle (fast, mid, slow, auto)", "Receive", "button", "agc", short="AGC"),
+    _fn("preamp_cycle", "IPO / AMP1 / AMP2 cycle", "Receive", "button", "cycle", ("PA", 3), "IPO/AMP"),
+    _fn("att_cycle", "Attenuator cycle (off, 6, 12, 18 dB)", "Receive", "button", "cycle", ("RA", 4), "ATT"),
+    _fn("filter_narrow", "Filter narrower", "Filter", "button", "width", -1, "Filter -"),
+    _fn("filter_wide", "Filter wider", "Filter", "button", "width", +1, "Filter +"),
+    _fn("filter_width", "Filter width", "Filter", "encoder", "width"),
+    _fn("if_shift", "IF shift", "Filter", "encoder", "shift", short="IF shift"),
+    _fn("if_shift_zero", "IF shift to 0", "Filter", "button", "shift_zero", short="Shift 0"),
+    _fn("nb", "Noise blanker on/off", "Noise", "button", "toggle", "NB", "NB"),
+    _fn("nr", "Noise reduction on/off", "Noise", "button", "toggle", "NR", "NR"),
+    _fn("nr_level_cycle", "NR level cycle (1, 4, 8, 12, 15)", "Noise", "button", "nr_level", short="NR lvl"),
+    _fn("nr_level", "NR level", "Noise", "absolute", "level", ("RL", 1, 15, 2), "NR level"),
+    _fn("dnf", "Auto notch (DNF) on/off", "Noise", "button", "toggle", "BC", "DNF"),
+    _fn("notch_onoff", "Manual notch on/off", "Noise", "button", "notch_onoff", short="Notch"),
+    _fn("notch_freq", "Manual notch frequency", "Noise", "encoder", "notch_freq", short="Notch Hz"),
+    _fn("mox", "MOX on VFO-B (press on / press off, max 60 s)", "Transmit on VFO-B", "button", "mox",
+        short="MOX"),
+    _fn("atu_tune", "ATU tune on VFO-B", "Transmit on VFO-B", "button", "tune_atu", short="TUNE"),
+]
+DJ_FN = {f["id"]: f for f in DJ_FUNCTIONS}
+
+# The AetherSDR starter layout, translated to VFO-B of the FTDX101D
+DJ_STARTER = {
+    "a.jog": "tune", "a.masterTempo": "nb", "a.sync": "nr", "a.pitchBendDown": "filter_narrow",
+    "a.pitchBendUp": "filter_wide", "a.pitch": "if_shift", "a.key1": "mode_down", "a.key2": "mode_up",
+    "a.key3": "squelch_onoff", "a.key4": "notch_onoff", "a.rewind": "step_down", "a.forward": "step_up",
+    "a.cue": "mode_lsb", "a.play": "mode_usb", "a.volume": "af_gain", "a.treble": "squelch",
+    "a.medium": "rf_gain", "a.listen": "mute", "a.load": "copy_ab", "mixer.scratch": "tune_lock",
+    "mixer.up": "band_up", "mixer.down": "band_down", "mixer.folder": "nr_level_cycle",
+    "mixer.files": "agc_cycle", "b.key1": "mode_cwu", "b.key2": "mode_am", "b.key3": "mode_fm",
+    "b.key4": "mode_datau", "b.key5": "dnf", "b.pitch": "notch_freq", "b.rewind": "mhz_down",
+    "b.forward": "mhz_up", "b.cue": "atu_tune", "b.play": "mox",
+}
+
+
+def resource_path(name: str) -> str:
+    """A file shipped with vRadio (inside the one-file exe, or next to vradio.py)."""
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, name)
+
+
+def load_dj_layout() -> dict:
+    with open(resource_path(DJ_LAYOUT_NAME), encoding="utf-8") as f:
+        return json.load(f)
+
+
+class DjControls:
+    """Buttons, knobs, faders and wheels of the DJ controller -> CAT commands for our VFO (SUB),
+    following the mapping set in the DJ mapper page."""
+
+    def __init__(self, emu: "TS2000Emulator", jog: "JogTuner", map_path: str | None = None,
+                 layout: dict | None = None):
+        import collections
+        self.emu, self.jog = emu, jog
+        self.layout = layout or load_dj_layout()
+        self.by_msg = {("note" if c["message"] == "note" else "cc", c["number"]): c
+                       for c in self.layout["controls"]}
+        self.by_id = {c["id"]: c for c in self.layout["controls"]}
+        self.map_path = map_path or os.path.join(APP_DIR, DJ_MAP_NAME)
+        self.mapping: dict[str, str] = {}
+        self.saved_at = 0.0                     # time of the last save (shown on the page)
+        self.pending: dict[str, int] = {}       # absolute control -> latest value (once per batch)
+        self.endless: dict[str, int] = {}       # endless control -> summed steps
+        self.saved = {"SQ": 50, "AG": 128}      # levels to restore (squelch on, unmute)
+        self.mox = False
+        self.tx_until = 0.0                     # MOX / TUNE safety release time
+        self.select_until = 0.0                 # mapper page "select by touch": functions paused
+        self.seen = collections.deque(maxlen=50)   # (seq, control id, text) for the mapper page
+        self.seq = 0
+        self.load()
+
+    # --- mapping --------------------------------------------------------------
+    def load(self):
+        try:
+            with open(self.map_path, encoding="utf-8") as f:
+                raw = json.load(f).get("map", {})
+            self.saved_at = os.path.getmtime(self.map_path)
+            log.info("DJ mapping: %s (%d controls)", self.map_path, len(raw))
+        except FileNotFoundError:
+            raw = dict(DJ_STARTER)
+            log.info("DJ mapping: no %s yet - using the VFO-B starter layout", DJ_MAP_NAME)
+        except (OSError, ValueError) as e:
+            raw = dict(DJ_STARTER)
+            log.warning("DJ mapping: %s unreadable (%s) - using the VFO-B starter layout",
+                        self.map_path, e)
+        self.set_mapping(raw, save=False)
+
+    def set_mapping(self, raw: dict, save: bool = True):
+        clean = {}
+        for cid, fid in raw.items():
+            c, fn = self.by_id.get(cid), DJ_FN.get(fid)
+            if c and fn and fn["kind"] == c["kind"]:
+                clean[cid] = fid
+        self.mapping = clean
+        # the jog tuner tunes from every endless control mapped to "tune"
+        self.jog.ccs.clear()
+        self.jog.ccs.update(self.by_id[cid]["number"] for cid, fid in clean.items() if fid == "tune")
+        if save:
+            self._write(self.map_path, clean)
+            self.saved_at = time.time()
+
+    @property
+    def backup_path(self) -> str:
+        return self.map_path[:-5] + ".bak.json" if self.map_path.endswith(".json") else self.map_path + ".bak"
+
+    def _write(self, path: str, mapping: dict):
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"version": 1, "controller": self.layout.get("id"), "map": mapping}, f,
+                      indent=1, sort_keys=True)
+        os.replace(tmp, path)
+
+    def replace_mapping(self, raw: dict):
+        """Whole new mapping (starter / clear all / undo): the old one goes to the backup file
+        first, so Undo can bring it back - also after a restart."""
+        self._write(self.backup_path, self.mapping)
+        self.set_mapping(raw)
+
+    def backup(self) -> dict | None:
+        try:
+            with open(self.backup_path, encoding="utf-8") as f:
+                return json.load(f).get("map", {})
+        except (OSError, ValueError):
+            return None
+
+    def undo(self):
+        """Swap the mapping and the backup (so a second Undo redoes)."""
+        old = self.backup()
+        if old is None:
+            raise ValueError("nothing to undo")
+        self.replace_mapping(old)
+
+    def assign(self, cid: str, fid: str | None):
+        if cid not in self.by_id:
+            raise ValueError(f"unknown control {cid}")
+        if fid and DJ_FN.get(fid, {}).get("kind") != self.by_id[cid]["kind"]:
+            raise ValueError(f"{fid} does not fit a {self.by_id[cid]['kind']}")
+        m = dict(self.mapping)
+        if fid:
+            m[cid] = fid
+        else:
+            m.pop(cid, None)
+        self.set_mapping(m)
+        log.info("DJ mapping: %s -> %s", self.by_id[cid]["name"], DJ_FN[fid]["label"] if fid else "(free)")
+
+    @property
+    def selecting(self) -> bool:
+        return time.time() < self.select_until
+
+    # --- MIDI in ------------------------------------------------------------
+    def control_of(self, status: int, d1: int):
+        kind = status & 0xF0
+        if kind in (0x80, 0x90):
+            return self.by_msg.get(("note", d1))
+        if kind == 0xB0:
+            return self.by_msg.get(("cc", d1))
+        return None
+
+    def touched(self, status: int, d1: int, d2: int):
+        """Every MIDI message: remember which control moved (the mapper page selects it)."""
+        c = self.control_of(status, d1)
+        if c is None or (status & 0xF0 == 0x90 and d2 == 0) or status & 0xF0 == 0x80:
+            return
+        self.seq += 1
+        self.seen.append((self.seq, c["id"], f"{status:02X} {d1:02X} {d2:02X}"))
+
+    def event(self, status: int, d1: int, d2: int):
+        """A message that is not tuning: run the function mapped to its control."""
+        c = self.control_of(status, d1)
+        if c is None or self.selecting:
+            return
+        fid = self.mapping.get(c["id"])
+        if not fid:
+            return
+        kind = status & 0xF0
+        if c["kind"] == "button":
+            if kind == 0x90 and d2 > 0:
+                self.run_safe(c, DJ_FN[fid], None)
+        elif c["kind"] == "absolute":
+            self.pending[c["id"]] = d2
+        elif c["kind"] == "encoder":
+            self.endless[c["id"]] = self.endless.get(c["id"], 0) + jog_delta(d2)
+
+    def flush(self):
+        """Send the last value of each moved fader and the summed endless steps."""
+        pending, self.pending = self.pending, {}
+        for cid, v in pending.items():
+            fid = self.mapping.get(cid)
+            if fid:
+                self.run_safe(self.by_id[cid], DJ_FN[fid], v)
+        endless, self.endless = self.endless, {}
+        for cid, n in endless.items():
+            fid = self.mapping.get(cid)
+            if fid and n:
+                self.run_safe(self.by_id[cid], DJ_FN[fid], n)
+        self.check_tx_timeout()
+
+    def run_safe(self, c: dict, fn: dict, value):
+        try:
+            what = getattr(self, "do_" + fn["act"])(fn["arg"], value)
+            if what:
+                log.info("DJ %s: %s", c["name"], what)
+        except (RadioError, ValueError, IndexError) as e:
+            log.warning("DJ %s (%s): %s", c["name"], fn["label"], e)
+
+    # --- helpers ------------------------------------------------------------
+    @property
+    def b(self) -> str:
+        return self.emu.band                      # "1" = SUB (VFO-B)
+
+    def q(self, prefix: str) -> str:
+        """Ask the radio, return the payload after `prefix` (without ';')."""
+        return self.emu.r.query(prefix + ";")[len(prefix):-1]
+
+    def send(self, cmd: str):
+        self.emu.r.send(cmd)
+
+    def busy_tx(self) -> bool:
+        return self.emu.transmitting or self.emu.cat_tx
+
+    def _toggle(self, prefix: str, on: str = "1", off: str = "0") -> str:
+        """Flip an on/off setting and report what the radio says afterwards."""
+        cur = self.q(prefix)
+        self.send(f"{prefix}{off if cur != off else on};")
+        return f"{prefix} {cur} -> {self.q(prefix)}"
+
+    # --- actions: do_<act>(arg from the catalogue, value from the control) ---
+    def do_level(self, arg, v):
+        cmd, lo, hi, *width = arg
+        val = lo + round(v * (hi - lo) / 127)
+        self.send(f"{cmd}{self.b}{val:0{width[0] if width else 3}d};")
+        if cmd in self.saved and val:
+            self.saved[cmd] = val
+        return f"{cmd}{self.b} {val}"
+
+    def do_toggle(self, prefix, _):
+        return self._toggle(prefix + self.b)
+
+    def do_cycle(self, arg, _):
+        prefix, n = arg
+        cur = int(self.q(prefix + self.b) or 0)
+        new = (cur + 1) % n
+        self.send(f"{prefix}{self.b}{new};")
+        return f"{prefix}{self.b} {cur} -> {new}"
+
+    def do_width(self, d, n):
+        step = d if n is None else n
+        cur = self.q("SH" + self.b)                # e.g. "012": fixed 0 + width index 00..23
+        head, idx = cur[:-2], int(cur[-2:])
+        new = max(0, min(23, idx + step))
+        self.send(f"SH{self.b}{head}{new:02d};")
+        return f"width index {idx} -> {new}"
+
+    def do_mode(self, d, _):
+        if self.busy_tx():
+            return "ignored while transmitting"
+        cur = self.q("MD" + self.b)
+        codes = [m for m, _ in YAESU_MODES]
+        i = codes.index(cur) if cur in codes else 0
+        code, name = YAESU_MODES[(i + d) % len(YAESU_MODES)]
+        self.send(f"MD{self.b}{code};")
+        return f"mode {name}"
+
+    def do_setmode(self, code, _):
+        if self.busy_tx():
+            return "ignored while transmitting"
+        self.send(f"MD{self.b}{code};")
+        return "mode " + dict(YAESU_MODES).get(code, code)
+
+    def do_squelch_onoff(self, _, __):
+        cur = int(self.q("SQ" + self.b))
+        if cur:
+            self.saved["SQ"] = cur
+        new = 0 if cur else self.saved["SQ"]
+        self.send(f"SQ{self.b}{new:03d};")
+        return f"squelch {cur} -> {new}"
+
+    def do_mute(self, _, __):
+        cur = int(self.q("AG" + self.b))
+        if cur:
+            self.saved["AG"] = cur
+        new = 0 if cur else self.saved["AG"]
+        self.send(f"AG{self.b}{new:03d};")
+        return "muted" if not new else f"unmuted (AF {new})"
+
+    def do_notch_onoff(self, _, __):
+        return self._toggle(f"BP{self.b}0", on="001", off="000")
+
+    def do_notch_freq(self, _, n):
+        cur = int(self.q(f"BP{self.b}1"))           # 001..320 = x 10 Hz
+        new = max(1, min(320, cur + n))
+        self.send(f"BP{self.b}1{new:03d};")
+        return f"notch {new * 10} Hz"
+
+    def _shift_set(self, change):
+        import re
+        cur = self.q("IS" + self.b)                 # e.g. "0+0000" (fixed 0, sign, Hz)
+        m = re.match(r"^(\D*\d?)([+-])(\d+)$", cur)
+        if not m:
+            raise ValueError(f"unexpected IF shift answer IS{self.b}{cur};")
+        head, sign, digits = m.groups()
+        hz = change(int(digits) * (-1 if sign == "-" else 1))
+        hz = max(-1200, min(1200, hz))
+        self.send(f"IS{self.b}{head}{'-' if hz < 0 else '+'}{abs(hz):0{len(digits)}d};")
+        return f"IF shift {hz:+d} Hz"
+
+    def do_shift(self, _, n):
+        return self._shift_set(lambda hz: hz + 20 * n)
+
+    def do_shift_zero(self, _, __):
+        return self._shift_set(lambda hz: 0)
+
+    def do_tune(self, _, n):
+        pass                                        # tuning is done by JogTuner (see set_mapping)
+
+    def do_step(self, d, _):
+        cur = self.jog.step
+        i = min(range(len(JOG_STEPS)), key=lambda k: abs(JOG_STEPS[k] - cur))
+        self.jog.step = JOG_STEPS[max(0, min(len(JOG_STEPS) - 1, i + d))]
+        return f"tune step {self.jog.step} Hz"
+
+    def do_lock(self, _, __):
+        self.jog.locked = not self.jog.locked
+        return "tuning wheel locked" if self.jog.locked else "tuning wheel unlocked"
+
+    def do_copy_ab(self, _, __):
+        if self.busy_tx():
+            return "ignored while transmitting"
+        self.emu.copy_to_own("(DJ controller)")
+        return None
+
+    def do_band(self, cmd, _):
+        if self.busy_tx():
+            return "ignored while transmitting"
+        self.send(f"{cmd}{self.b};")
+        self.emu.freq_gen += 1
+        return "band up" if cmd == "BU" else "band down"
+
+    def _move(self, hz):
+        if self.busy_tx():
+            return "ignored while transmitting"
+        y = self.emu.ymap["A"]
+        f = max(30_000, min(int(self.q("F" + y)) + hz, 75_000_000))
+        self.send(f"F{y}{f:09d};")
+        self.emu.freq_gen += 1
+        return f"VFO-{y} {f} Hz"
+
+    def do_mhz(self, d, _):
+        return self._move(d * 1_000_000)
+
+    def do_khz(self, d, _):
+        return self._move(d * 1_000)
+
+    def do_nr_level(self, _, __):
+        cur = int(self.q("RL" + self.b))            # 01..15
+        levels = [1, 4, 8, 12, 15]
+        new = next((x for x in levels if x > cur), levels[0])
+        self.send(f"RL{self.b}{new:02d};")
+        return f"NR level {new}"
+
+    def do_agc(self, _, __):
+        cur = self.q("GT" + self.b)                 # set 1 fast 2 mid 3 slow 4 auto; read 4-6 = auto
+        nxt = {"1": "2", "2": "3", "3": "4"}.get(cur, "1")
+        self.send(f"GT{self.b}{nxt};")
+        return "AGC " + {"1": "FAST", "2": "MID", "3": "SLOW", "4": "AUTO"}[nxt]
+
+    # --- transmit on VFO-B ----------------------------------------------------
+    def do_mox(self, _, __):
+        emu = self.emu
+        if self.mox:
+            self.mox, self.tx_until = False, 0.0
+            emu.handle("RX")
+            return "MOX off"
+        if emu.transmitting or emu.cat_tx:
+            return "MOX refused: the radio is already transmitting"
+        emu.handle("TX")                            # ST1 + TX1, exactly like radio 2's CAT TX
+        self.mox, self.tx_until = True, time.time() + DJ_TX_LIMIT
+        return f"MOX on VFO-{emu.ymap['A']} (press again to stop; auto off after {DJ_TX_LIMIT} s)"
+
+    def do_tune_atu(self, _, __):
+        emu = self.emu
+        if emu.transmitting or emu.cat_tx:
+            return "TUNE refused: the radio is already transmitting"
+        with emu.lock:
+            emu.cat_tx = True                       # keep TX on our VFO while the tuner works
+            emu.tx_on_own()
+            time.sleep(0.05)
+            self.send("AC002;")
+        self.tx_until = time.time() + 20
+        return f"ATU tune on VFO-{emu.ymap['A']}"
+
+    def check_tx_timeout(self):
+        """Safety: MOX never stays on longer than DJ_TX_LIMIT s; a TUNE that never keyed
+        gives the TX VFO back after 20 s."""
+        if not self.tx_until or time.time() < self.tx_until:
+            return
+        self.tx_until = 0.0
+        emu = self.emu
+        if self.mox:
+            self.mox = False
+            log.warning("DJ MOX: auto off after %d s", DJ_TX_LIMIT)
+            emu.handle("RX")
+        elif emu.cat_tx and not emu.transmitting:
+            with emu.lock:
+                emu.cat_tx = False
+                emu.apply_idle_tx("DJ TUNE finished")
+
+
+class DjWebServer:
+    """The DJ mapper page on http://127.0.0.1:<port>/ - click a control (or touch it on the
+    controller) and pick its VFO-B function. Changes apply at once and are saved."""
+
+    def __init__(self, controls: DjControls, jog: "JogTuner", port: int):
+        self.controls, self.jog, self.port = controls, jog, port
+        self.error: str | None = None
+
+    @property
+    def url(self) -> str:
+        return f"http://127.0.0.1:{self.port}/"
+
+    def state(self, after: int) -> dict:
+        c = self.controls
+        return {
+            "device": self.jog.device, "deviceError": self.jog.error, "step": self.jog.step,
+            "locked": self.jog.locked, "mapping": c.mapping, "selecting": c.selecting,
+            "seq": c.seq, "events": [e for e in c.seen if e[0] > after], "version": __version__,
+            "savedAt": c.saved_at, "mapFile": os.path.basename(c.map_path),
+            "undo": c.backup() is not None,
+        }
+
+    def functions(self) -> list[dict]:
+        return [{k: f[k] for k in ("id", "label", "group", "kind", "short")} for f in DJ_FUNCTIONS]
+
+    def run(self, stop: threading.Event):
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        from urllib.parse import urlparse, parse_qs
+        srv_self = self
+
+        class H(BaseHTTPRequestHandler):
+            def log_message(self, fmt, *args):
+                log.debug("dj web: " + fmt, *args)
+
+            def _send(self, code, body, ctype="application/json; charset=utf-8"):
+                data = body if isinstance(body, bytes) else (
+                    json.dumps(body).encode("utf-8") if not isinstance(body, str) else body.encode("utf-8"))
+                self.send_response(code)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(data)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(data)
+
+            def do_GET(self):
+                u = urlparse(self.path)
+                if u.path in ("/", "/index.html"):
+                    with open(resource_path("dj_mapper.html"), "rb") as f:
+                        return self._send(200, f.read(), "text/html; charset=utf-8")
+                if u.path == "/api/layout":
+                    return self._send(200, srv_self.controls.layout)
+                if u.path == "/api/functions":
+                    return self._send(200, {"functions": srv_self.functions(), "starter": DJ_STARTER})
+                if u.path == "/api/state":
+                    after = int(parse_qs(u.query).get("after", ["0"])[0] or 0)
+                    return self._send(200, srv_self.state(after))
+                self._send(404, {"error": "not found"})
+
+            def do_POST(self):
+                # only this PC's browser: refuse requests a web page on another site might send
+                origin = self.headers.get("Origin")
+                if origin and origin.rstrip("/") not in (srv_self.url.rstrip("/"),
+                                                         f"http://localhost:{srv_self.port}"):
+                    return self._send(403, {"error": "forbidden"})
+                n = int(self.headers.get("Content-Length") or 0)
+                try:
+                    body = json.loads(self.rfile.read(n) or b"{}")
+                    c = srv_self.controls
+                    if self.path == "/api/assign":
+                        c.assign(body["control"], body.get("function"))
+                    elif self.path == "/api/mapping":       # whole mapping: starter / clear all
+                        c.replace_mapping(body.get("map") or {})
+                        log.info("DJ mapping replaced (%d controls), the previous one is in %s",
+                                 len(c.mapping), os.path.basename(c.backup_path))
+                    elif self.path == "/api/undo":
+                        c.undo()
+                        log.info("DJ mapping: undo (%d controls)", len(c.mapping))
+                    elif self.path == "/api/select":        # page heartbeat while "select by touch"
+                        c.select_until = time.time() + 2.5 if body.get("on") else 0.0
+                    else:
+                        return self._send(404, {"error": "not found"})
+                    self._send(200, srv_self.state(c.seq))
+                except (KeyError, ValueError, OSError) as e:
+                    self._send(400, {"error": str(e)})
+
+        try:
+            httpd = ThreadingHTTPServer(("127.0.0.1", self.port), H)
+        except OSError as e:
+            self.error = f"port {self.port} busy"
+            log.error("DJ mapper page: cannot use port %d (%s) - set dj_web_port to another port",
+                      self.port, e)
+            return
+        httpd.daemon_threads = True
+        log.info("DJ mapper page: %s", self.url)
+        threading.Thread(target=lambda: (stop.wait(), httpd.shutdown()), daemon=True).start()
+        httpd.serve_forever(poll_interval=0.5)
+
 
 # ---------------------------------------------------------------------------
 # Settings file (INI)
@@ -1143,6 +1707,12 @@ def main():
                     help="MIDI controller numbers that tune (default 48 = MP3 e2 left jog wheel; "
                          "49 = right jog wheel, 48,49 = both; find others with --midi-learn)")
     ap.add_argument("--midi-no-accel", action="store_true", help="fixed step size, no acceleration")
+    ap.add_argument("--midi-no-buttons", action="store_true",
+                    help="only the jog wheel (--midi-cc); the DJ controller's buttons, knobs and faders "
+                         "do nothing and there is no DJ mapper page")
+    ap.add_argument("--dj-web-port", type=int, default=8065,
+                    help="DJ mapper page on http://127.0.0.1:PORT/ (this PC only): click a control or "
+                         "touch it on the controller and pick its VFO-B function (default 8065)")
     ap.add_argument("--midi-learn", action="store_true",
                     help="log every MIDI message (to find the wheel's controller number)")
     ap.add_argument("--poll", type=float, default=0.3, help="AI auto-info poll interval, seconds")
@@ -1361,6 +1931,11 @@ def _run_core(a, stop: threading.Event, state: dict):
     if a.midi:
         jog = JogTuner(emu, step=max(1, a.midi_step), ccs=parse_cc_list(a.midi_cc),
                        accel=not a.midi_no_accel, learn=a.midi_learn)
+        if not a.midi_no_buttons:
+            jog.controls = DjControls(emu, jog)
+            web = DjWebServer(jog.controls, jog, a.dj_web_port)
+            state["djweb"] = web
+            threading.Thread(target=web.run, args=(server.stop,), daemon=True).start()
         state["jog"] = jog
         threading.Thread(target=jog.run, args=(server.stop, a.midi), daemon=True).start()
     server.run()
@@ -1656,6 +2231,12 @@ def run_tray(a, stop: threading.Event, state: dict):
     def open_folder(icon, item):
         os.startfile(APP_DIR)
 
+    def open_dj_mapper(icon, item):
+        import webbrowser
+        web = state.get("djweb")
+        if web:
+            webbrowser.open(web.url)
+
     def quit_app(icon, item):
         log.info("Exit from tray menu")
         stop.set()
@@ -1747,6 +2328,8 @@ def run_tray(a, stop: threading.Event, state: dict):
         pystray.Menu.SEPARATOR,
         pystray.MenuItem(f"Copy VFO-{other} -> VFO-{own} (same band)", copy_ab),
         pystray.MenuItem("Monitor (CAT / radio)...", open_monitor),
+        pystray.MenuItem("DJ controller mapping...", open_dj_mapper,
+                         visible=lambda item: bool(state.get("djweb"))),
         pystray.MenuItem("Open log", open_log),
         pystray.MenuItem("Open vRadio folder", open_folder),
         pystray.MenuItem(f"Edit settings ({CONFIG_NAME})", edit_settings),
