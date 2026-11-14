@@ -86,3 +86,28 @@ vRadio 1.0.9+ with `pcs = 2` broadcasts one UDP packet on **PingPong's own port 
 
 `pcs = 2` turns it on with port 46070. `pingpong_port = 0` in `vradiodj.ini` / `vradio.ini`
 turns it off; another number sends to that port instead.
+
+## Cross-check with N1MM's own network (14 Nov 2026, 22:17-22:19)
+
+N1MM's computer-to-computer network (TCP 12070, plain text `DATA__00%station%TYPE%...~__DATA`)
+has an `XMIT` message. `XMIT -1%<message text>%...` is sent **only by the station that really
+starts transmitting**; `XMIT 0%%...` (end) is sent by both. Recorded side by side with vRadio:
+
+| Time | N1MM network | vRadio `vRadioShare` |
+|---|---|---|
+| 22:18:39.123 | S50C-E8460P (client) `XMIT -1` "F4 S51CAB" | 22:18:39.124 `Tx=B` from 10.147.17.187 |
+| 22:18:55.524 | L15CAB (host) `XMIT -1` "F4 S51CAB" | 22:18:55.584 `Tx=A` local |
+
+Every `XMIT -1` matched vRadio's `Tx` within 0-60 ms, and no station ever sent `XMIT -1` for the
+other's transmission. So N1MM's network and vRadio agree; only RadioInfo `IsTransmitting` is
+wrong for stations that share a radio. vRadio's packet is the easy source for PingPong (a UDP
+broadcast it already receives); `XMIT` would need listening to N1MM's TCP links.
+
+## Note on PingPong 1.102 `SharedTx`
+
+PingPong 1.102 has its own guard (`SharedTx` in `pingpong_common`): stations that report TX **on
+the same frequency** are treated as one radio; the first one owns the transmission and the
+others' TX is ignored for a tail time. That does not catch this case: with vRadio the two
+stations work **different VFOs on different frequencies** (e.g. host 3528.11 on VFO-A, client
+3534.01 on VFO-B), and "TX on different frequencies is never touched". The `vRadioShare` packet
+pairs the stations by IP instead of by frequency, so it covers it.
