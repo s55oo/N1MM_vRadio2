@@ -70,7 +70,7 @@ class TrafficMonitor:
 
 MON = TrafficMonitor()
 
-__version__ = "1.0.8"
+__version__ = "1.0.9"
 GITHUB_REPO = "s55oo/N1MM_vRadio2"
 
 # vRadioTray.exe is built without a console: then sys.stderr is None and we run in the tray.
@@ -222,6 +222,12 @@ class TS2000Emulator:
         self.udp_last = 0.0                 # time of the last N1MM RadioInfo packet
         self.transmitting = False
         self.cat_tx = False                 # between CAT TX; and RX; from N1MM radio 2
+        self.tx_owner = None                # client that sent the CAT TX; (only it is told "TX")
+        self.tx_owner_t = 0.0               # when it did
+        self.tx_vfo = None                  # radio VFO ("A"/"B") of the transmission on air
+        self.tx_released = False            # the owner sent RX; (radio may still be in its tail)
+        self.changed = threading.Event()    # TX or clients changed: tell PingPong now
+        self._client = None                 # client whose command handle() is running
         self.freq_gen = 0                   # +1 whenever N1MM or follow-band sets our VFO
         self.split_off_idle = False         # split on only during radio 2's CAT TX
         self.ai = 0
@@ -256,19 +262,52 @@ class TS2000Emulator:
         tx_sub = self._val("FT;", 2) == "1"
         return tx_sub != self.swap
 
-    def build_if(self) -> str:
+    def if_parts(self) -> dict:
+        """Read the radio once for IF answers: the IF text and who the transmission belongs to."""
         # OI = information for the SUB band, same layout as IF
         y = self.r.query("OI;" if self.swap else "IF;", "OI" if self.swap else "IF")
         if len(y) < 28:
             raise RadioError(f"short IF: {y}")
+        radio_tx = self._val("TX;", 2) != "0"
+        on_own = False
+        if radio_tx and not self.cat_tx:
+            on_own = (self._val("FT;", 2) == "1") == self.swap      # transmitting on our VFO?
+        elif not radio_tx and not self.cat_tx and (self.tx_released or time.time() - self.tx_owner_t > 2):
+            self.tx_owner, self.tx_vfo = None, None                 # that transmission is over
+        return {"y": y, "tx": radio_tx, "on_own": on_own, "split": "1" if self._split() else "0"}
+
+    def tx_reported(self, parts: dict, client) -> bool:
+        """Is this transmission `client`'s? Keyed by CAT TX;: only the client that sent it.
+        Keyed otherwise (WinKeyer, PTT line, VOX, radio 1's N1MM on its own CAT port): only if
+        the radio transmits on our VFO (then it is radio 2's TX, e.g. SO2R on one PC)."""
+        if not parts["tx"]:
+            return False
+        if self.cat_tx or self.tx_owner is not None:
+            return client is not None and client == self.tx_owner
+        return parts["on_own"]
+
+    def format_if(self, parts: dict, client) -> str:
+        y = parts["y"]
         mem, freq, clar = y[2:5], y[5:14], y[14:19]
         rx_clar, tx_clar, ymode, vfomem = y[19], y[20], y[21], y[22]
-        tx = "1" if self._val("TX;", 2) != "0" else "0"
-        split = "1" if self._split() else "0"
+        tx = "1" if self.tx_reported(parts, client) else "0"
         kvfo = "0" if vfomem == "0" else "2"
         kmode = Y2K_MODE.get(ymode, "2")
         return ("IF" + f"{int(freq):011d}" + "00000" + clar + rx_clar + tx_clar +
-                mem + tx + kmode + kvfo + "0" + split + "0" + "00" + "0" + ";")
+                mem + tx + kmode + kvfo + "0" + parts["split"] + "0" + "00" + "0" + ";")
+
+    def build_if(self, client=None) -> str:
+        return self.format_if(self.if_parts(), client)
+
+    def if_for_clients(self, clients: list) -> dict:
+        """IF answers for several clients from one radio read (auto-information push)."""
+        with self.lock:
+            try:
+                parts = self.if_parts()
+                return {c: self.format_if(parts, c) for c in clients}
+            except (RadioError, ValueError, IndexError) as e:
+                log.debug("AI IF: %s", e)
+                return {}
 
     # --- TX VFO selection (Yaesu ST1 = TX on SUB, ST0 = TX on MAIN) --------
     def tx_on_own(self):
@@ -321,12 +360,21 @@ class TS2000Emulator:
             try:
                 with self.lock:
                     is_tx = self._val("TX;", 2) != "0"
+                    if not is_tx and self.tx_released and not self.cat_tx and self.tx_owner is not None:
+                        self.tx_owner, self.tx_vfo = None, None      # owner's tail is over
+                        self.changed.set()
                     known = self.want_own is not None or self.split_off_idle
                     if self.transmitting and not is_tx:
                         self.transmitting = False
                         self.cat_tx = False
+                        self.tx_owner, self.tx_vfo = None, None
+                        self.changed.set()
                         self.apply_idle_tx("TX -> RX")
                     elif is_tx and not self.transmitting:
+                        if self.tx_vfo is None or self.tx_owner is None:   # keyed without CAT: which VFO?
+                            self.tx_vfo = "B" if self._val("FT;", 2) == "1" else "A"
+                        self.transmitting = True            # before the event: PingPong reads it at once
+                        self.changed.set()
                         if known and not self.tx_vfo_ok():
                             log.warning("TX started on the wrong VFO - keyed before vRadio could "
                                         "correct it")
@@ -435,9 +483,12 @@ class TS2000Emulator:
             stop.wait(interval)
 
     # --- dispatcher --------------------------------------------------------
-    def handle(self, cmd: str) -> str:
-        """cmd without trailing ';'. Returns the reply to send to the app ('' for none)."""
+    def handle(self, cmd: str, client=None) -> str:
+        """cmd without trailing ';'. Returns the reply to send to the app ('' for none).
+        `client` names who sent it (TCP address, COM port, "dj"): TX is reported back only to
+        the client that keyed the radio."""
         with self.lock:
+            self._client = client
             try:
                 return self._handle(cmd.upper(), cmd[2:])
             except (RadioError, ValueError, IndexError) as e:
@@ -482,7 +533,7 @@ class TS2000Emulator:
                 return ""
             return self._freq(vfo)
         if c == "IF":
-            return self.build_if()
+            return self.build_if(self._client)
 
         # Mode
         if c == "MD":
@@ -504,8 +555,12 @@ class TS2000Emulator:
 
         # PTT
         if c == "TX":
+            self.tx_owner, self.tx_owner_t = self._client, time.time()
+            self.tx_released = False
             if self.auto_split:
+                self.tx_vfo = self.ymap["A"]            # our VFO
                 self.cat_tx = True
+                self.changed.set()                      # after the state: PingPong reads it at once
                 self.tx_on_own()          # transmit on the VFO this software controls
                 time.sleep(0.05)
             r.send("TX1;")
@@ -514,6 +569,10 @@ class TS2000Emulator:
             return f"TX{p[0]};" if p else ""
         if c == "RX":
             r.send("TX0;")
+            # keep tx_owner: the radio can stay on air for a moment (PTT tail, break-in delay)
+            # and that tail is still this client's transmission. The TX watcher clears it at RX.
+            self.tx_owner_t = time.time()
+            self.tx_released = True
             if self.auto_split:
                 self.cat_tx = False
                 time.sleep(0.05)
@@ -649,7 +708,7 @@ class CatServer:
             if not self.emu.ai or not self.ser:
                 last = None
                 continue
-            ans = self.emu.handle("IF")
+            ans = self.emu.handle("IF", self.port)
             if ans != "?;" and ans != last:
                 last = ans
                 log.debug("AI push %s", ans)
@@ -677,7 +736,7 @@ class CatServer:
                         cmd = raw.strip()
                         if not cmd:
                             continue
-                        reply = self.emu.handle(cmd)
+                        reply = self.emu.handle(cmd, self.port)
                         log.debug("app %-16s -> %s", cmd + ";", reply or "(none)")
                         MON.cat(self.port, cmd, reply)
                         self.write(reply)
@@ -713,20 +772,29 @@ class TcpCatServer:
         if s:
             conn.sendall(s.encode("ascii"))
 
+    @staticmethod
+    def client_id(conn: socket.socket) -> str:
+        try:
+            return "%s:%d" % conn.getpeername()[:2]
+        except OSError:
+            return "?"
+
     def auto_info_loop(self):
-        last = None
+        last: dict[str, str] = {}
         while not self.stop.is_set():
             time.sleep(self.poll)
             with self.clock:
                 clients = list(self.clients)
             if not self.emu.ai or not clients:
-                last = None
+                last = {}
                 continue
-            ans = self.emu.handle("IF")
-            if ans != "?;" and ans != last:
-                last = ans
-                log.debug("AI push %s", ans)
-                for c in clients:
+            ids = {c: self.client_id(c) for c in clients}
+            answers = self.emu.if_for_clients(list(ids.values()))   # TX only to its owner
+            for c, cid in ids.items():
+                ans = answers.get(cid)
+                if ans and ans != last.get(cid):
+                    last[cid] = ans
+                    log.debug("AI push %s -> %s", ans, cid)
                     try:
                         self._send(c, ans)
                     except OSError:
@@ -734,6 +802,7 @@ class TcpCatServer:
 
     def client_loop(self, conn: socket.socket, addr):
         log.info("TCP client connected: %s:%d", *addr)
+        cid = "%s:%d" % addr[:2]               # TX is reported only to the client that keyed it
         conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         with self.clock:
             self.clients.append(conn)
@@ -750,7 +819,7 @@ class TcpCatServer:
                     cmd = raw.strip()
                     if not cmd:
                         continue
-                    reply = self.emu.handle(cmd)
+                    reply = self.emu.handle(cmd, cid)
                     log.debug("tcp %-16s -> %s", cmd + ";", reply or "(none)")
                     MON.cat(addr[0], cmd, reply)
                     c2 = cmd[:2].upper()
@@ -772,7 +841,7 @@ class TcpCatServer:
             if keyed and self.emu.cat_tx:
                 # it keyed the radio and left without RX;: never leave the radio transmitting
                 log.warning("TCP client %s left while keying the radio - PTT released", addr[0])
-                self.emu.handle("RX")
+                self.emu.handle("RX", cid)
 
     def run(self):
         threading.Thread(target=self.auto_info_loop, daemon=True).start()
@@ -1417,11 +1486,11 @@ class DjControls:
         emu = self.emu
         if self.mox:
             self.mox, self.tx_until = False, 0.0
-            emu.handle("RX")
+            emu.handle("RX", "dj")
             return "MOX off"
         if emu.transmitting or emu.cat_tx:
             return "MOX refused: the radio is already transmitting"
-        emu.handle("TX")                            # ST1 + TX1, exactly like radio 2's CAT TX
+        emu.handle("TX", "dj")                      # ST1 + TX1, like radio 2's CAT TX; no N1MM sees it
         self.mox, self.tx_until = True, time.time() + DJ_TX_LIMIT
         return f"MOX on VFO-{emu.ymap['A']} (press again to stop; auto off after {DJ_TX_LIMIT} s)"
 
@@ -1431,6 +1500,7 @@ class DjControls:
             return "TUNE refused: the radio is already transmitting"
         with emu.lock:
             emu.cat_tx = True                       # keep TX on our VFO while the tuner works
+            emu.tx_owner, emu.tx_owner_t = "dj", time.time()
             emu.tx_on_own()
             time.sleep(0.05)
             self.send("AC002;")
@@ -1447,7 +1517,7 @@ class DjControls:
         if self.mox:
             self.mox = False
             log.warning("DJ MOX: auto off after %d s", DJ_TX_LIMIT)
-            emu.handle("RX")
+            emu.handle("RX", "dj")
         elif emu.cat_tx and not emu.transmitting:
             with emu.lock:
                 emu.cat_tx = False
@@ -1648,6 +1718,9 @@ def apply_pcs(a) -> list[str]:
         if getattr(a, k) != v:
             setattr(a, k, v)
             changed.append(f"{k} = {'no' if v is False else 'yes' if v is True else 'off' if v is None else v}")
+    if getattr(a, "pingpong_port", 0) is None:
+        a.pingpong_port = 46070                     # PingPong's lamp port; 0 in the ini = off
+        changed.append("pingpong_port = 46070")
     return changed
 
 
@@ -1710,6 +1783,10 @@ def main():
     ap.add_argument("--midi-no-buttons", action="store_true",
                     help="only the jog wheel (--midi-cc); the DJ controller's buttons, knobs and faders "
                          "do nothing and there is no DJ mapper page")
+    ap.add_argument("--pingpong-port", type=int, default=None,
+                    help="with pcs = 2: tell PingPong on this UDP port (its own lamp port, 46070) which "
+                         "stations share this radio and who really transmits. 0 = off. Default 46070 "
+                         "with pcs = 2, off otherwise")
     ap.add_argument("--dj-web-port", type=int, default=8065,
                     help="DJ mapper page on http://127.0.0.1:PORT/ (this PC only): click a control or "
                          "touch it on the controller and pick its VFO-B function (default 8065)")
@@ -1786,6 +1863,8 @@ def main():
     state = {"radio": None, "emu": None, "server": None, "error": None, "args": a,
              "update": None, "relaunch": None, "parser": ap}
     stop = threading.Event()
+    install_diagnostics(state)
+    threading.Thread(target=alive_loop, args=(stop, state), daemon=True, name="alive").start()
 
     if a.update or (a.auto_update and not a.updated):     # --updated: just restarted, no loop
         if not getattr(sys, "frozen", False):
@@ -1822,7 +1901,17 @@ def main():
             return
         t = threading.Thread(target=run_core, args=(a, stop, state), daemon=True)
         t.start()
-        run_tray(a, stop, state)
+        try:
+            run_tray(a, stop, state)
+        except Exception as e:
+            log.exception("Tray icon failed: %s", e)
+            state["exit_reason"] = f"tray icon error: {e}"
+        if state.get("relaunch") and not state.get("exit_reason"):
+            state["exit_reason"] = "restart / update from the tray menu"
+        if not state.get("exit_reason"):
+            # the tray loop ended without Exit / Restart / Update from the menu
+            state["exit_reason"] = "the tray icon loop ended by itself (not from the tray menu)"
+            log.warning("Tray icon loop ended by itself - vRadio is closing")
         stop.set()
         t.join(8)
         if state["radio"]:
@@ -1841,6 +1930,157 @@ def main():
         stop.set()
         if state["radio"]:
             state["radio"].close()
+
+
+# ---------------------------------------------------------------------------
+# Tell PingPong which stations share this radio and who really transmits
+# ---------------------------------------------------------------------------
+class PingPongShare:
+    """Broadcasts <vRadioShare> on PingPong's own UDP port (46070), every second and at once
+    when TX or the clients change. The N1MM on this PC (HostVfo) and the N1MM clients on our TCP
+    port (Clients, ClientVfo) share one radio; Tx/TxFrom say who is really on air, held until the
+    radio is back on RX (tail included). PingPong matches Ips/Clients with its lamps' <Ips>."""
+
+    def __init__(self, emu: "TS2000Emulator", server, port: int, radio_name: str = "FTDX101D"):
+        self.emu, self.server, self.port, self.radio_name = emu, server, port, radio_name
+        self.seq = 0
+        self.id = f"{socket.gethostname()}-{os.getpid()}"
+        self.ips: list[str] = []
+        self.ips_t = 0.0
+        self.socks: dict[str, socket.socket] = {}
+
+    def local_ips(self) -> list[str]:
+        if time.time() - self.ips_t > 30:
+            try:
+                infos = socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)
+                self.ips = sorted({i[4][0] for i in infos if not i[4][0].startswith("127.")})
+            except OSError:
+                pass
+            self.ips_t = time.time()
+        return self.ips
+
+    def clients(self) -> list[str]:
+        peers = self.server.peers() if hasattr(self.server, "peers") else []
+        return sorted({p for p in peers if not p.startswith("127.")})
+
+    def tx_state(self) -> tuple[str, str]:
+        emu = self.emu
+        if not (emu.transmitting or emu.cat_tx) or emu.tx_vfo is None:
+            return "none", ""
+        owner = emu.tx_owner
+        if owner == "dj":
+            frm = "dj"
+        elif isinstance(owner, str) and ":" in owner:
+            frm = owner.rsplit(":", 1)[0]                   # TCP client "ip:port" -> ip
+        else:
+            frm = "local"
+        return emu.tx_vfo, frm
+
+    def packet(self) -> bytes:
+        from xml.sax.saxutils import escape
+        emu = self.emu
+        tx, frm = self.tx_state()
+        own = emu.ymap["A"]                                 # radio VFO the clients have
+        self.seq += 1
+        fields = [("Id", self.id), ("Host", socket.gethostname()), ("Version", __version__),
+                  ("Ips", ",".join(self.local_ips())), ("Radio", self.radio_name),
+                  ("HostVfo", "A" if own == "B" else "B"), ("ClientVfo", own),
+                  ("Clients", ",".join(self.clients())), ("Tx", tx), ("TxFrom", frm),
+                  ("Seq", str(self.seq))]
+        body = "".join(f"<{k}>{escape(v)}</{k}>" for k, v in fields)
+        return f"<vRadioShare>{body}</vRadioShare>".encode("utf-8")
+
+    def targets(self) -> list[tuple[str, str]]:
+        """(source ip, destination) pairs: every interface, limited + /24 broadcast, and localhost."""
+        out = [("127.0.0.1", "127.0.0.1")]
+        for ip in self.local_ips():
+            out.append((ip, "255.255.255.255"))
+            out.append((ip, ip.rsplit(".", 1)[0] + ".255"))
+        return out
+
+    def send(self):
+        data = self.packet()
+        for src, dst in self.targets():
+            try:
+                sk = self.socks.get(src)
+                if sk is None:
+                    sk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    sk.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+                    sk.bind((src, 0))
+                    self.socks[src] = sk
+                sk.sendto(data, (dst, self.port))
+            except OSError as e:
+                log.debug("PingPong share %s -> %s: %s", src, dst, e)
+                self.socks.pop(src, None)
+
+    def run(self, stop: threading.Event):
+        log.info("PingPong: telling PingPong on UDP %d which stations share this radio and who "
+                 "transmits", self.port)
+        last = None
+        while not stop.is_set():
+            self.emu.changed.wait(1.0)
+            self.emu.changed.clear()
+            state = (self.tx_state(), tuple(self.clients()))
+            if state != last:
+                log.debug("PingPong share: tx %s from %s, clients %s", *state[0], ",".join(state[1]))
+                last = state
+            self.send()
+
+
+# ---------------------------------------------------------------------------
+# Diagnostics: leave a trace however vRadio ends
+# ---------------------------------------------------------------------------
+CRASH_NAME = "vradio_crash.txt"
+_started = time.time()
+
+
+def install_diagnostics(state: dict):
+    """Log uncaught exceptions (any thread), hard crashes (faulthandler -> vradio_crash.txt) and
+    every exit, so a vRadio that disappears leaves a reason in the log."""
+    import atexit
+    import faulthandler
+
+    def hook(exc_type, exc, tb):
+        log.critical("Uncaught error: %s", exc, exc_info=(exc_type, exc, tb))
+
+    def thread_hook(args):
+        if args.exc_type is SystemExit:
+            return
+        log.critical("Uncaught error in thread %s: %s", getattr(args.thread, "name", "?"),
+                     args.exc_value, exc_info=(args.exc_type, args.exc_value, args.exc_traceback))
+
+    sys.excepthook = hook
+    threading.excepthook = thread_hook
+    try:
+        f = open(os.path.join(APP_DIR, CRASH_NAME), "a", encoding="utf-8")
+        f.write(f"\n=== vRadio {__version__} started {time.strftime('%Y-%m-%d %H:%M:%S')} pid {os.getpid()} ===\n")
+        f.flush()
+        faulthandler.enable(file=f, all_threads=True)
+        state["crash_file"] = f                       # keep it open for the whole run
+    except OSError as e:
+        log.warning("Crash log %s not available: %s", CRASH_NAME, e)
+
+    def at_exit():
+        log.info("vRadio exiting (pid %d, up %s, reason: %s)", os.getpid(), uptime(),
+                 state.get("exit_reason") or "unknown")
+        logging.shutdown()
+    atexit.register(at_exit)
+    log.info("Diagnostics on: pid %d, crash log %s", os.getpid(), CRASH_NAME)
+
+
+def uptime() -> str:
+    m = int((time.time() - _started) // 60)
+    return f"{m // 60}h {m % 60:02d}m"
+
+
+def alive_loop(stop: threading.Event, state: dict, every: float = 600):
+    """One line every 10 minutes: if vRadio vanishes, the log shows roughly when."""
+    while not stop.wait(every):
+        radio, jog, server = state.get("radio"), state.get("jog"), state.get("server")
+        clients = len(getattr(server, "clients", []) or [])
+        log.info("Alive: up %s, radio %s, N1MM clients %d%s", uptime(),
+                 "ok" if radio is not None and radio.ok else "NOT answering", clients,
+                 "" if jog is None else f", DJ controller {jog.device or 'not connected'}")
 
 
 def run_core(a, stop: threading.Event, state: dict):
@@ -1920,6 +2160,9 @@ def _run_core(a, stop: threading.Event, state: dict):
         log.info("Dual RX keeper on (%s)", a.dual_rx_cmd)
     if a.auto_split:
         threading.Thread(target=emu.tx_watch_loop, args=(server.stop,), daemon=True).start()
+        if getattr(a, "pingpong_port", None):
+            share = PingPongShare(emu, server, a.pingpong_port)
+            threading.Thread(target=share.run, args=(server.stop,), daemon=True, name="pingpong").start()
         log.info("TX watcher on: split off as soon as the radio returns to RX")
         if emu.split_off_idle:
             log.info("Split off when idle: split on only during radio 2's CAT TX")
@@ -2239,6 +2482,7 @@ def run_tray(a, stop: threading.Event, state: dict):
 
     def quit_app(icon, item):
         log.info("Exit from tray menu")
+        state["exit_reason"] = "Exit from the tray menu"
         stop.set()
         icon.stop()
 

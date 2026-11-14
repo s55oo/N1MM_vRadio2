@@ -16,3 +16,4 @@ dist/vradio.ini
 dist/vradiodj.ini
 dist/vradiodj_midi*.json
 dist/vRadioDJ_mapping*.jpg
+dist/vradio_crash.txt

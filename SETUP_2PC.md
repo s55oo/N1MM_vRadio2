@@ -142,6 +142,16 @@ Things to know:
 - **Esc** (or the next F-key) sends CLEAR to the shared keyer and cuts the message currently being
   sent, from either laptop.
 
+**TX status:** vRadio tells laptop 2's N1MM "TX" only while laptop 2 itself keyed the radio by
+CAT `TX;`. When laptop 1 transmits (on VFO-A), laptop 2's N1MM sees RX, so its RadioInfo
+broadcast and the tools that read it (e.g. PingPong) show the right radio transmitting. The TX
+interlock between the laptops is N1MM's multi-computer network, not this status.
+
+**PingPong:** laptop 1's N1MM reads the radio directly on COM10 and so also sees TX while laptop 2
+transmits (and in the tail after it). vRadio therefore tells PingPong itself who shares the
+radio and who really transmits: a `<vRadioShare>` broadcast on PingPong's UDP port 46070
+(`pcs = 2` turns it on, `pingpong_port = 0` off). Details for PingPong: `PINGPONG_SHARE.md`.
+
 ## Checks
 
 - Laptop 2: send a CQ. The radio transmits on **VFO-B**; vRadio's log (verbose) shows `tcp TX;`,

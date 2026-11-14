@@ -1,5 +1,27 @@
 # Changelog
 
+## v1.0.9 - 14 Nov 2026
+
+- **PingPong is told which stations share the radio and who really transmits.** With `pcs = 2`
+  vRadio broadcasts `<vRadioShare>` on PingPong's UDP port 46070 every second and at every
+  change: the host (VFO-A) and client (VFO-B) IPs, and `Tx` none / A / B with `TxFrom`, held
+  until the radio is really back on RX. PingPong can then ignore the host N1MM's false TX during
+  the client's transmissions and their tail. Spec for PingPong: `PINGPONG_SHARE.md`.
+  `pingpong_port = 0` switches it off.
+- A transmission stays its keying client's until the radio is really back on RX (PTT tail and
+  break-in delay included), not only until its `RX;`.
+- **TX is reported only to the client that keyed it.** An N1MM (or DXLog) connected to vRadio
+  sees TX in its `IF` answers and auto-information only for its own CAT `TX;`; every other client
+  sees RX. Keying without CAT (WinKeyer, PTT line, VOX, radio 1's N1MM on its own port) counts as
+  radio 2's TX only when the radio transmits on VFO-B. MOX and TUNE from the DJ controller are
+  reported to no N1MM. So vRadio no longer tells laptop 2's N1MM "TX" while laptop 1 transmits.
+  (Its RadioInfo can still say TX: both N1MMs share one WinKeyer and see the other's CW as
+  "keyer busy". PingPong should use the `vRadioShare` packet for these stations.)
+- **Diagnostics**: uncaught errors in any thread are logged with their traceback, hard crashes go
+  to `vradio_crash.txt` (next to the exe), every exit logs its reason, and the tray versions log
+  when the tray icon loop ends by itself. An `Alive:` line every 10 minutes shows when vRadio was
+  last running.
+
 ## v1.0.8 - 12 Nov 2026
 
 - **DJ mapper page** in vRadioDJ (`http://127.0.0.1:8065/`, tray: *DJ controller mapping...*):
