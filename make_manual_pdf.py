@@ -81,7 +81,7 @@ DIAGRAM = """FTDX101D --- COM14 38400 8N1 ---> vRadio.exe --- TCP 127.0.0.1:4532
 
 story = [
     p("vRadio", H1),
-    p("Yaesu FTDX101D as a Kenwood TS-2000 for N1MM Logger+ &nbsp;|&nbsp; manual for v1.0.10, 18 Nov 2026", SUB),
+    p("Yaesu FTDX101D as a Kenwood TS-2000 for N1MM Logger+ &nbsp;|&nbsp; manual for v1.0.11, 18 Nov 2026", SUB),
     p("vRadio connects to the FTDX101D on <b>COM14 (38400 8N1)</b> and presents the radio's "
       "<b>VFO-B (SUB)</b> to N1MM Logger+ as <b>radio 2</b>, a Kenwood TS-2000, over <b>TCP port 4532</b>. "
       "N1MM radio 1 stays on its own connection to the radio's VFO-A (MAIN)."),
@@ -310,6 +310,25 @@ story = [
     p("Settings in " + c("vradiodj.ini") + ": " + c("dj_web_port = 8065") + "; " + c("midi_no_buttons = yes")
       + " keeps only the jog wheel. Details: " + c("DJ_CONTROLS.md") + "."),
     pic("dj_mapping_example.jpg", "Save picture (JPG): an example mapping with 12 functions", 150 * mm),
+
+    p("11. TMate 1.0 tuning knob (vRadioTM)", H2),
+    p(c("vRadioTM.exe") + " is vRadio with the WoodBoxRadio / ELAD TMate 1.0 (one wheel, four keys) instead of "
+      "the DJ controller. The TMate reaches vRadio as MIDI through Tmate-as-MIDI "
+      "(github.com/s55oo/Tmate-as-MIDI)."),
+    code("TMate (USB, WinUSB) -> Tmate-as-MIDI -> loopMIDI port \"TMate 1.0\" -> vRadioTM -> COM14 -> VFO-B"),
+    *bullets([
+        "Once: bind the TMate (USB 1721:0607) to <b>WinUSB</b> with Zadig, run as administrator "
+        "(Options > List All Devices > Tmate 1.0 USB > WinUSB > Install Driver), then replug it.",
+        "Once: install loopMIDI and add a port named exactly <b>TMate 1.0</b>; leave loopMIDI running.",
+        "Start Tmate-as-MIDI (" + c(r"bin\tmate1-midi-hidden.vbs") + ") with its default settings: wheel CC 1, "
+        "format offset, invert on; keys notes 60-63.",
+        "Start " + c("vRadioTM.exe") + " (settings " + c("vradiotm.ini") + ", same keys as "
+        + c("vradiodj.ini") + " with " + c("midi = TMate") + " and " + c("midi_cc = 1") + "). The tray shows "
+        "<i>TMate wheel: TMate 1.0</i>. Run only one of vRadioTM, vRadioDJ, vRadioTray (they share COM14).",
+        "The wheel tunes VFO-B. The keys get any VFO-B function on the mapper page (tray > <i>TMate controller "
+        "mapping...</i>), saved in " + c("vradiotm_midi.json") + ". Starter: key 1 step -, key 2 step +, "
+        "key 3 copy A to B, key 4 wheel lock.",
+    ]),
 ]
 
 

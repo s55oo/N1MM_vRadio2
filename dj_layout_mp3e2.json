@@ -3,6 +3,7 @@
   "version": 1,
   "id": "hercules-djcontrol-mp3-e2",
   "name": "Hercules DJControl MP3 e2 / MP3 LE / Glow",
+  "title": "DJ Control MP3 e2 → FTDX101D VFO-B",
   "notes": "MIDI numbers from the Mixxx project's MP3 e2 mapping (factory default channel 1). Coordinates match a 650x450 top-view photo scaled x2. The Loops/Fx button has no MIDI message of its own: it switches the four number keys between notes for keys 1-4 and 5-8.",
   "width": 1300,
   "height": 900,
@@ -62,6 +63,36 @@
       "y": 262,
       "w": 204,
       "h": 232
+    }
+  ],
+  "decor": [
+    {
+      "type": "line",
+      "x1": 446,
+      "y1": 40,
+      "x2": 446,
+      "y2": 860
+    },
+    {
+      "type": "line",
+      "x1": 854,
+      "y1": 40,
+      "x2": 854,
+      "y2": 860
+    },
+    {
+      "type": "text",
+      "x": 70,
+      "y": 470,
+      "text": "A",
+      "class": "deck"
+    },
+    {
+      "type": "text",
+      "x": 1230,
+      "y": 470,
+      "text": "B",
+      "class": "deck"
     }
   ],
   "controls": [

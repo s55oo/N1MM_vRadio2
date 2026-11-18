@@ -70,12 +70,29 @@ class TrafficMonitor:
 
 MON = TrafficMonitor()
 
-__version__ = "1.0.10"
+__version__ = "1.0.11"
 GITHUB_REPO = "s55oo/N1MM_vRadio2"
 
 # vRadioTray.exe is built without a console: then sys.stderr is None and we run in the tray.
 WINDOWED = sys.stderr is None
 APP_DIR = os.path.dirname(os.path.abspath(sys.executable if getattr(sys, "frozen", False) else __file__))
+
+# vRadioDJ.exe / vRadioTM.exe = the same program with a MIDI controller on by default and its own
+# settings file: DJ = Hercules DJ Control MP3 e2, TM = WoodBoxRadio/ELAD TMate 1.0 through
+# github.com/s55oo/Tmate-as-MIDI (loopMIDI port "TMate 1.0").
+_EXE = os.path.basename(sys.executable if getattr(sys, "frozen", False) else "").lower()
+IS_DJ = _EXE.startswith("vradiodj")
+IS_TM = _EXE.startswith("vradiotm")
+APP_NAME = "vRadioTM" if IS_TM else "vRadioDJ" if IS_DJ else "vRadio"
+CONTROLLERS = {
+    # relative: how an endless wheel encodes a step. "twos": 1..63 = +, 127..65 = - (MP3 e2).
+    # "offset": 65..127 = +, 63..0 = -, 64 = none (Tmate-as-MIDI's default format).
+    "mp3e2": {"label": "DJ", "layout": "dj_layout_mp3e2.json", "map": "vradiodj_midi.json",
+              "midi": "MP3", "cc": "48", "relative": "twos", "connect_dump": True},
+    "tmate": {"label": "TMate", "layout": "dj_layout_tmate.json", "map": "vradiotm_midi.json",
+              "midi": "TMate", "cc": "1", "relative": "offset", "connect_dump": False},
+}
+CTRL = CONTROLLERS["tmate" if IS_TM else "mp3e2"]
 
 # ---------------------------------------------------------------------------
 # Mode tables
@@ -926,8 +943,12 @@ class MidiIn:
         self.handle, self.name = None, None
 
 
-def jog_delta(v: int) -> int:
-    """Relative jog value: 1..63 = clockwise steps, 65..127 = counter-clockwise (127 = -1)."""
+def jog_delta(v: int, fmt: str = "twos") -> int:
+    """Relative wheel value -> steps (+ = clockwise).
+    "twos": 1..63 = clockwise, 65..127 = counter-clockwise (127 = -1) - MP3 e2.
+    "offset": 65..127 = clockwise (65 = +1), 63..0 = counter-clockwise (63 = -1), 64 = none."""
+    if fmt == "offset":
+        return v - 64
     return v if v < 64 else v - 128
 
 
@@ -957,6 +978,8 @@ class JogTuner:
         self.target = f"VFO-{emu.ymap['A']}" if emu is not None else "VFO"
         self.locked = False                 # Scratch button: wheel locked
         self.controls: "DjControls | None" = None   # buttons, knobs, faders (DJ mapper page)
+        self.relative = CTRL["relative"]    # how the wheel encodes a step (see CONTROLLERS)
+        self.label = CTRL["label"]          # "DJ" / "TMate" in log and tray
 
     def ticks_from(self, status: int, d1: int, d2: int) -> int:
         if self.learn:
@@ -965,7 +988,7 @@ class JogTuner:
             # buttons, knobs and faders: the mapping decides; tuning = controls mapped to "tune"
             self.controls.touched(status, d1, d2)
             if status & 0xF0 == 0xB0 and d1 in self.ccs:
-                return 0 if self.controls.selecting else jog_delta(d2)
+                return 0 if self.controls.selecting else jog_delta(d2, self.relative)
             self.controls.event(status, d1, d2)
             return 0
         if status & 0xF0 != 0xB0:            # control change only
@@ -974,7 +997,7 @@ class JogTuner:
             return 0
         if not self.ccs and d2 in (0, 64):     # absolute knobs/faders rest at 0/64: ignore
             return 0
-        return jog_delta(d2)
+        return jog_delta(d2, self.relative)
 
     def multiplier(self, ticks: int) -> int:
         """Fast spin = bigger steps. `ticks` is the sum over one 40 ms batch."""
@@ -1027,20 +1050,23 @@ class JogTuner:
                     try:
                         midi = midi or MidiIn()
                         if midi.open(want, self.events):
-                            self.skip_connect_dump(stop)
+                            if CTRL["connect_dump"]:
+                                self.skip_connect_dump(stop)
                             self.device, self.error = midi.name, None
-                            log.info("DJ wheel: '%s' connected - jog tunes %s, %d Hz per step%s",
-                                     midi.name, self.target, self.step,
-                                     "; buttons, knobs and faders follow the DJ mapper page"
+                            log.info("%s wheel: '%s' connected - wheel tunes %s, %d Hz per step%s",
+                                     self.label, midi.name, self.target, self.step,
+                                     "; the other controls follow the mapper page"
                                      if self.controls else "")
                         elif self.error != "not found":
                             self.error = "not found"
-                            log.warning("DJ wheel: no MIDI device matching '%s' (found: %s) - "
-                                        "is the driver installed? Retrying every 5 s", want,
-                                        ", ".join(midi.devices()) or "none")
+                            log.warning("%s wheel: no MIDI device matching '%s' (found: %s) - "
+                                        "is the driver installed%s? Retrying every 5 s",
+                                        self.label, want,
+                                        ", ".join(midi.devices()) or "none",
+                                        ", loopMIDI port and Tmate-as-MIDI running" if IS_TM else "")
                     except OSError as e:
                         if self.error != str(e):
-                            log.warning("DJ wheel: %s", e)
+                            log.warning("%s wheel: %s", self.label, e)
                         self.error = str(e)
                 stop.wait(0.5)
                 continue
@@ -1048,7 +1074,7 @@ class JogTuner:
             if time.time() >= next_try:
                 next_try = time.time() + 5
                 if not any(midi.name == n for n in midi.devices()):
-                    log.warning("DJ wheel: '%s' disconnected", midi.name)
+                    log.warning("%s wheel: '%s' disconnected", self.label, midi.name)
                     midi.close()
                     self.device, self.error = None, "disconnected"
                     continue
@@ -1085,8 +1111,8 @@ YAESU_MODES = [("1", "LSB"), ("2", "USB"), ("3", "CW-U"), ("7", "CW-L"), ("5", "
                ("6", "RTTY-L"), ("9", "RTTY-U"), ("8", "DATA-L"), ("C", "DATA-U")]
 JOG_STEPS = [1, 5, 10, 20, 50, 100, 500]
 DJ_TX_LIMIT = 60                                    # MOX switches itself off after this many s
-DJ_MAP_NAME = "vradiodj_midi.json"
-DJ_LAYOUT_NAME = "dj_layout_mp3e2.json"
+DJ_MAP_NAME = CTRL["map"]
+DJ_LAYOUT_NAME = CTRL["layout"]
 
 
 def _fn(fid, label, group, kind, act, arg=None, short=None):
@@ -1149,6 +1175,10 @@ DJ_STARTER = {
     "b.key4": "mode_datau", "b.key5": "dnf", "b.pitch": "notch_freq", "b.rewind": "mhz_down",
     "b.forward": "mhz_up", "b.cue": "atu_tune", "b.play": "mox",
 }
+# TMate 1.0: wheel tunes, keys 1-4 (left to right) step -, step +, copy A->B, wheel lock
+TM_STARTER = {"wheel": "tune", "key1": "step_down", "key2": "step_up", "key3": "copy_ab",
+              "key4": "tune_lock"}
+STARTER = TM_STARTER if IS_TM else DJ_STARTER
 
 
 def resource_path(name: str) -> str:
@@ -1193,12 +1223,12 @@ class DjControls:
             with open(self.map_path, encoding="utf-8") as f:
                 raw = json.load(f).get("map", {})
             self.saved_at = os.path.getmtime(self.map_path)
-            log.info("DJ mapping: %s (%d controls)", self.map_path, len(raw))
+            log.info("%s mapping: %s (%d controls)", CTRL["label"], self.map_path, len(raw))
         except FileNotFoundError:
-            raw = dict(DJ_STARTER)
-            log.info("DJ mapping: no %s yet - using the VFO-B starter layout", DJ_MAP_NAME)
+            raw = dict(STARTER)
+            log.info("%s mapping: no %s yet - using the VFO-B starter layout", CTRL["label"], DJ_MAP_NAME)
         except (OSError, ValueError) as e:
-            raw = dict(DJ_STARTER)
+            raw = dict(STARTER)
             log.warning("DJ mapping: %s unreadable (%s) - using the VFO-B starter layout",
                         self.map_path, e)
         self.set_mapping(raw, save=False)
@@ -1259,7 +1289,7 @@ class DjControls:
         else:
             m.pop(cid, None)
         self.set_mapping(m)
-        log.info("DJ mapping: %s -> %s", self.by_id[cid]["name"], DJ_FN[fid]["label"] if fid else "(free)")
+        log.info("%s mapping: %s -> %s", CTRL["label"], self.by_id[cid]["name"], DJ_FN[fid]["label"] if fid else "(free)")
 
     @property
     def selecting(self) -> bool:
@@ -1297,7 +1327,7 @@ class DjControls:
         elif c["kind"] == "absolute":
             self.pending[c["id"]] = d2
         elif c["kind"] == "encoder":
-            self.endless[c["id"]] = self.endless.get(c["id"], 0) + jog_delta(d2)
+            self.endless[c["id"]] = self.endless.get(c["id"], 0) + jog_delta(d2, self.jog.relative)
 
     def flush(self):
         """Send the last value of each moved fader and the summed endless steps."""
@@ -1317,9 +1347,9 @@ class DjControls:
         try:
             what = getattr(self, "do_" + fn["act"])(fn["arg"], value)
             if what:
-                log.info("DJ %s: %s", c["name"], what)
+                log.info("%s %s: %s", CTRL["label"], c["name"], what)
         except (RadioError, ValueError, IndexError) as e:
-            log.warning("DJ %s (%s): %s", c["name"], fn["label"], e)
+            log.warning("%s %s (%s): %s", CTRL["label"], c["name"], fn["label"], e)
 
     # --- helpers ------------------------------------------------------------
     @property
@@ -1575,9 +1605,9 @@ class DjWebServer:
                     with open(resource_path("dj_mapper.html"), "rb") as f:
                         return self._send(200, f.read(), "text/html; charset=utf-8")
                 if u.path == "/api/layout":
-                    return self._send(200, srv_self.controls.layout)
+                    return self._send(200, dict(srv_self.controls.layout, app=APP_NAME))
                 if u.path == "/api/functions":
-                    return self._send(200, {"functions": srv_self.functions(), "starter": DJ_STARTER})
+                    return self._send(200, {"functions": srv_self.functions(), "starter": STARTER})
                 if u.path == "/api/state":
                     after = int(parse_qs(u.query).get("after", ["0"])[0] or 0)
                     return self._send(200, srv_self.state(after))
@@ -1618,7 +1648,7 @@ class DjWebServer:
                       self.port, e)
             return
         httpd.daemon_threads = True
-        log.info("DJ mapper page: %s", self.url)
+        log.info("%s mapper page: %s", CTRL["label"], self.url)
         threading.Thread(target=lambda: (stop.wait(), httpd.shutdown()), daemon=True).start()
         httpd.serve_forever(poll_interval=0.5)
 
@@ -1626,10 +1656,8 @@ class DjWebServer:
 # ---------------------------------------------------------------------------
 # Settings file (INI)
 # ---------------------------------------------------------------------------
-# vRadioDJ.exe = the same program with the DJ wheel on by default and its own settings file
-_EXE = os.path.basename(sys.executable if getattr(sys, "frozen", False) else "").lower()
-IS_DJ = _EXE.startswith("vradiodj")
-CONFIG_NAME = "vradiodj.ini" if IS_DJ else "vradio.ini"
+# vRadioDJ.exe / vRadioTM.exe have their own settings file (see CTRL at the top)
+CONFIG_NAME = "vradiotm.ini" if IS_TM else "vradiodj.ini" if IS_DJ else "vradio.ini"
 CONFIG_SECTION = "vradio"
 # options that make no sense in a settings file
 NOT_IN_CONFIG = {"help", "version", "port", "baud", "update", "updated", "config", "no_config",
@@ -1776,14 +1804,16 @@ def main():
                     help="with --dual-rx: seconds between dual RX checks (default 0.1). N1MM radio 1 "
                          "switches dual RX off at every spot jump; VFO-B is silent until the next "
                          "check. Smaller = shorter dropout, more traffic on the radio port (min 0.03)")
-    ap.add_argument("--midi", metavar="NAME", default="MP3" if IS_DJ else None,
-                    help="DJ controller jog wheel tunes our VFO (radio 2): MIDI input whose name "
-                         "contains NAME, e.g. MP3 for Hercules DJ Control MP3 e2")
+    ap.add_argument("--midi", metavar="NAME", default=CTRL["midi"] if IS_DJ or IS_TM else None,
+                    help="MIDI controller wheel tunes our VFO (radio 2): MIDI input whose name "
+                         "contains NAME, e.g. MP3 for Hercules DJ Control MP3 e2, TMate for the "
+                         "TMate 1.0 through Tmate-as-MIDI (loopMIDI port 'TMate 1.0')")
     ap.add_argument("--midi-step", type=int, default=10,
                     help="Hz per jog wheel step (default 10; faster spinning = 3x / 10x)")
-    ap.add_argument("--midi-cc", metavar="LIST", default="48",
-                    help="MIDI controller numbers that tune (default 48 = MP3 e2 left jog wheel; "
-                         "49 = right jog wheel, 48,49 = both; find others with --midi-learn)")
+    ap.add_argument("--midi-cc", metavar="LIST", default=CTRL["cc"],
+                    help="MIDI controller numbers that tune (vRadioDJ default 48 = MP3 e2 left jog "
+                         "wheel, 49 = right, 48,49 = both; vRadioTM default 1 = TMate wheel; find "
+                         "others with --midi-learn)")
     ap.add_argument("--midi-no-accel", action="store_true", help="fixed step size, no acceleration")
     ap.add_argument("--midi-no-buttons", action="store_true",
                     help="only the jog wheel (--midi-cc); the DJ controller's buttons, knobs and faders "
@@ -2380,11 +2410,11 @@ def status_lines(a, state: dict) -> tuple[list[str], str]:
     jog = state.get("jog")
     if getattr(a, "midi", None):
         if jog is None:
-            lines.append("DJ wheel: starting")
+            lines.append(f"{CTRL['label']} wheel: starting")
         elif jog.device:
-            lines.append(f"DJ wheel: {jog.device} ({jog.step} Hz/step)")
+            lines.append(f"{jog.label} wheel: {jog.device} ({jog.step} Hz/step)")
         else:
-            lines.append(f"DJ wheel '{getattr(a, "midi", "")}': {jog.error or 'searching'}")
+            lines.append(f"{jog.label} wheel '{getattr(a, "midi", "")}': {jog.error or 'searching'}")
     if state.get("update"):
         lines.append(f"Update {state['update']['version']} available")
     if emu is not None and emu.transmitting and radio and radio.ok:
@@ -2579,7 +2609,7 @@ def run_tray(a, stop: threading.Event, state: dict):
         pystray.Menu.SEPARATOR,
         pystray.MenuItem(f"Copy VFO-{other} -> VFO-{own} (same band)", copy_ab),
         pystray.MenuItem("Monitor (CAT / radio)...", open_monitor),
-        pystray.MenuItem("DJ controller mapping...", open_dj_mapper,
+        pystray.MenuItem(f"{CTRL['label']} controller mapping...", open_dj_mapper,
                          visible=lambda item: bool(state.get("djweb"))),
         pystray.MenuItem("Open log", open_log),
         pystray.MenuItem("Open vRadio folder", open_folder),

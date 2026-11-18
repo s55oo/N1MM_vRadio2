@@ -1,0 +1,28 @@
+{
+  "format": "aethersdr-midi-layout",
+  "version": 1,
+  "id": "woodboxradio-tmate-1",
+  "name": "WoodBoxRadio / ELAD TMate 1.0",
+  "title": "TMate 1.0 → FTDX101D VFO-B",
+  "notes": "MIDI from github.com/s55oo/Tmate-as-MIDI with its default settings: the wheel sends CC 1 (channel 1, relative 'offset' format, invert on = clockwise up), keys 1-4 (left to right) send notes 60-63, momentary.",
+  "width": 900,
+  "height": 560,
+  "banks": [],
+  "bankSwitches": [],
+  "sections": [
+    { "x": 450, "y": 465, "w": 760, "h": 110 }
+  ],
+  "decor": [],
+  "controls": [
+    { "id": "wheel", "name": "Tuning wheel", "group": "TMate", "kind": "encoder", "message": "cc",
+      "number": 1, "shape": "jog", "x": 450, "y": 220, "r": 160, "face": "TUNE" },
+    { "id": "key1", "name": "Key 1 (leftmost)", "group": "TMate", "kind": "button", "message": "note",
+      "number": 60, "shape": "key", "x": 180, "y": 465, "w": 140, "h": 60, "label": "1" },
+    { "id": "key2", "name": "Key 2", "group": "TMate", "kind": "button", "message": "note",
+      "number": 61, "shape": "key", "x": 360, "y": 465, "w": 140, "h": 60, "label": "2" },
+    { "id": "key3", "name": "Key 3", "group": "TMate", "kind": "button", "message": "note",
+      "number": 62, "shape": "key", "x": 540, "y": 465, "w": 140, "h": 60, "label": "3" },
+    { "id": "key4", "name": "Key 4 (rightmost)", "group": "TMate", "kind": "button", "message": "note",
+      "number": 63, "shape": "key", "x": 720, "y": 465, "w": 140, "h": 60, "label": "4" }
+  ]
+}

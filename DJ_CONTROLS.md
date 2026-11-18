@@ -58,3 +58,34 @@ Cue ATU tune; Play MOX.
 |---|---|
 | `dj_web_port = 8065` | port of the mapper page |
 | `midi_no_buttons = yes` | only the jog wheel tunes (`midi_cc`); no mapping, no page |
+
+# TMate 1.0 tuning knob (vRadioTM)
+
+`vRadioTM.exe` is vRadio with the **WoodBoxRadio / ELAD TMate 1.0** (one wheel, four keys)
+instead of the DJ controller. The TMate reaches vRadio as MIDI through
+[Tmate-as-MIDI](https://github.com/s55oo/Tmate-as-MIDI):
+
+```
+TMate 1.0 (USB, WinUSB via Zadig) -> Tmate-as-MIDI -> loopMIDI port "TMate 1.0" -> vRadioTM -> VFO-B
+```
+
+1. Set up Tmate-as-MIDI as its README says: Zadig/WinUSB, Python packages, a loopMIDI port
+   named **TMate 1.0**, then start it (`py -m tmate1_midi`). Keep its defaults: wheel CC 1,
+   format `offset`, invert on; keys notes 60-63, momentary.
+2. Settings in `vradiotm.ini` next to `vRadioTM.exe` (same keys as `vradiodj.ini`; easiest is a
+   copy of it with `midi = TMate` and `midi_cc = 1`).
+3. Start `vRadioTM.exe`. The tray shows `TMate wheel: TMate 1.0 ... (10 Hz/step)`.
+   Or double-click **`dist\vRadioTM_start.bat`**: it starts loopMIDI, Tmate-as-MIDI
+   (`C:\Ham\Tmate-as-MIDI`) and vRadioTM in that order and skips what already runs (it does not
+   start vRadioTM while another vRadio has COM14). loopMIDI keeps its `TMate 1.0` port between
+   starts; it can also start with Windows (loopMIDI tray menu).
+4. Run only one of vRadioTM, vRadioDJ, vRadioTray: they all use COM14.
+
+The wheel tunes VFO-B (`midi_step` Hz per step, faster turning = bigger steps). The mapper page
+(tray > **TMate controller mapping...**, `http://127.0.0.1:8065/`) shows the TMate with its wheel
+and four keys and offers the same VFO-B functions as for the DJ controller, saved in
+`vradiotm_midi.json`. Starter layout: wheel = tune, key 1 = tune step down, key 2 = tune step
+up, key 3 = copy VFO-A → VFO-B, key 4 = lock the wheel.
+
+If you change the MIDI numbers or the wheel format in Tmate-as-MIDI, vRadioTM no longer matches
+them: keep the defaults (`format` must stay `offset`).

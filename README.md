@@ -20,6 +20,7 @@ Get the latest exes from **[Releases](https://github.com/s55oo/N1MM_vRadio2/rele
 - `vRadio.exe`: console version
 - `vRadioTray.exe`: system tray version
 - `vRadioDJ.exe`: system tray version with the DJ controller (settings in `vradiodj.ini`, see `DJ_CONTROLS.md`)
+- `vRadioTM.exe`: system tray version with the TMate 1.0 knob through Tmate-as-MIDI (settings in `vradiotm.ini`, see `DJ_CONTROLS.md`)
 - `radio_monitor.exe`: read-only CAT monitor for testing
 
 No installation and no Python needed. Put the exes in one folder (for example `C:\Ham\vRadio\dist`)
@@ -210,6 +211,7 @@ N1MM macro: `{CAT2ASC VRAB;}` copies VFO-A → VFO-B on a key press.
 | `dist\vRadioTray.exe` | The same, as a system tray app (no console). |
 | `dist\vRadio Tray.lnk` | Shortcut: vRadioTray with the full working options. |
 | `dist\vradio.example.ini` | Every setting with its explanation; copy to `vradio.ini`. |
+| `dist\vRadioTM_start.bat` | Starts loopMIDI, Tmate-as-MIDI and vRadioTM in order (TMate knob, see `DJ_CONTROLS.md`). |
 | `dist\vRadio_TEST.bat` | Full working setup with debug log. |
 | `dist\vRadio_N1MM_TCP.bat` | Older launcher: TCP + follow-band only (no auto-split). |
 | `dist\radio_monitor.exe` / `.bat` | Read-only monitor of FR/FT/ST/VS/TX/FA/FB/MD; prints every change. Stop vRadio first. |
@@ -225,10 +227,11 @@ N1MM macro: `{CAT2ASC VRAB;}` copies VFO-A → VFO-B on a key press.
 cd C:\Ham\vRadio
 "%LOCALAPPDATA%\Programs\Python\Python312\python.exe" -m PyInstaller --onefile --console --icon vradio.ico --name vRadio vradio.py
 "%LOCALAPPDATA%\Programs\Python\Python312\python.exe" -m PyInstaller --onefile --windowed --icon vradio.ico --name vRadioTray vradio.py
-"%LOCALAPPDATA%\Programs\Python\Python312\python.exe" -m PyInstaller --onefile --windowed --icon vradio.ico --add-data "dj_layout_mp3e2.json;." --add-data "dj_mapper.html;." --name vRadioDJ vradio.py
+"%LOCALAPPDATA%\Programs\Python\Python312\python.exe" -m PyInstaller --onefile --windowed --icon vradio.ico --add-data "dj_layout_mp3e2.json;." --add-data "dj_layout_tmate.json;." --add-data "dj_mapper.html;." --name vRadioDJ vradio.py
+"%LOCALAPPDATA%\Programs\Python\Python312\python.exe" -m PyInstaller --onefile --windowed --icon vradio.ico --add-data "dj_layout_mp3e2.json;." --add-data "dj_layout_tmate.json;." --add-data "dj_mapper.html;." --name vRadioTM vradio.py
 ```
-vRadioDJ needs both `--add-data` files (DJ layout and mapper page); without them it stops at start
-with `No such file ... dj_layout_mp3e2.json`.
+vRadioDJ and vRadioTM need the `--add-data` files (controller layouts and mapper page); without
+them they stop at start with `No such file ... dj_layout_....json`.
 (Python 3.12, pyserial and PyInstaller are installed for this user.)
 
 ---

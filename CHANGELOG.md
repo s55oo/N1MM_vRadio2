@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.0.11 - 18 Nov 2026
+
+- **vRadioTM.exe**: vRadio with the WoodBoxRadio / ELAD **TMate 1.0** knob instead of the DJ
+  controller, through [Tmate-as-MIDI](https://github.com/s55oo/Tmate-as-MIDI) (loopMIDI port
+  `TMate 1.0`). The wheel tunes VFO-B; the four keys get any VFO-B function on the mapper page
+  (starter: step -, step +, copy A->B, wheel lock). Own settings `vradiotm.ini` and mapping
+  `vradiotm_midi.json`. See `DJ_CONTROLS.md`.
+- `dist\vRadioTM_start.bat` starts loopMIDI, Tmate-as-MIDI and vRadioTM in order.
+- Manual: section 11, TMate 1.0 (vRadioTM), with the one-time Zadig / loopMIDI setup.
+- The mapper page draws whichever controller it is given (size, title, decks and key banks come
+  from the layout file); the DJ Control MP3 e2 page looks the same as before.
+- Endless wheels can use the "offset" relative format (64 = no change) as well as the MP3 e2's
+  two's complement.
+
 ## v1.0.10 - 18 Nov 2026
 
 - **Dual RX comes back faster after a spot jump.** N1MM radio 1 (FTDX101D, also in SO1V) sends
