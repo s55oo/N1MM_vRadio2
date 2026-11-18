@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v1.0.10 - 18 Nov 2026
 
 - **Dual RX comes back faster after a spot jump.** N1MM radio 1 (FTDX101D, also in SO1V) sends
   `FR01;` (single receive) at every bandmap click or Ctrl+Up/Down, which silences VFO-B. The dual
@@ -8,6 +8,8 @@
   about 0.3 s. New setting `dual_rx_interval` (`--dual-rx-interval`, default 0.1, min 0.03).
 - README: the vRadioDJ build command, which needs `--add-data` for `dj_layout_mp3e2.json` and
   `dj_mapper.html` (without them vRadioDJ stops at start).
+- `FR00;` confirmed on air as dual receive (MAIN + SUB), `FR01;` as single receive: the
+  long-standing open item is closed.
 
 ## v1.0.9 - 14 Nov 2026
 

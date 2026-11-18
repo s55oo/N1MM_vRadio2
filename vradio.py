@@ -70,7 +70,7 @@ class TrafficMonitor:
 
 MON = TrafficMonitor()
 
-__version__ = "1.0.9"
+__version__ = "1.0.10"
 GITHUB_REPO = "s55oo/N1MM_vRadio2"
 
 # vRadioTray.exe is built without a console: then sys.stderr is None and we run in the tray.
@@ -1771,7 +1771,7 @@ def main():
     ap.add_argument("--dual-rx", action="store_true",
                     help="keep dual receive (MAIN + SUB) on all the time")
     ap.add_argument("--dual-rx-cmd", default="FR00;",
-                    help="radio command for dual receive (default FR00; - verify on site)")
+                    help="radio command for dual receive (default FR00; = MAIN + SUB receive, confirmed on air)")
     ap.add_argument("--dual-rx-interval", type=float, default=0.1,
                     help="with --dual-rx: seconds between dual RX checks (default 0.1). N1MM radio 1 "
                          "switches dual RX off at every spot jump; VFO-B is silent until the next "

@@ -81,7 +81,7 @@ DIAGRAM = """FTDX101D --- COM14 38400 8N1 ---> vRadio.exe --- TCP 127.0.0.1:4532
 
 story = [
     p("vRadio", H1),
-    p("Yaesu FTDX101D as a Kenwood TS-2000 for N1MM Logger+ &nbsp;|&nbsp; manual for v1.0.8, 12 Nov 2026", SUB),
+    p("Yaesu FTDX101D as a Kenwood TS-2000 for N1MM Logger+ &nbsp;|&nbsp; manual for v1.0.10, 18 Nov 2026", SUB),
     p("vRadio connects to the FTDX101D on <b>COM14 (38400 8N1)</b> and presents the radio's "
       "<b>VFO-B (SUB)</b> to N1MM Logger+ as <b>radio 2</b>, a Kenwood TS-2000, over <b>TCP port 4532</b>. "
       "N1MM radio 1 stays on its own connection to the radio's VFO-A (MAIN)."),
@@ -95,7 +95,7 @@ story = [
     code(FULL),
     p("Normal use, without the debug log:"),
     code(NORMAL),
-    p("Without dual RX (if " + c("FR00;") + " turns out to be wrong):"),
+    p("Without the dual RX keeper:"),
     code(NODUAL),
     p("System tray version", H3),
     p("Double-click " + c(r"dist\vRadio Tray.lnk") + " (runs " + c(r"dist\vRadioTray.exe")
@@ -154,9 +154,11 @@ story = [
         "N1MM sees radio 2 as a plain, non-split radio.",
     ]),
     p("Dual RX", H3),
-    p("With " + c("--dual-rx") + ", vRadio reads " + c("FR;") + " 4 times a second and re-sends "
-      + c("--dual-rx-cmd") + " (" + c("FR00;") + ") if the radio reports something else. "
-      "This overrides manual dual-RX toggles."),
+    p("With " + c("--dual-rx") + ", vRadio reads " + c("FR;") + " every 0.1 s (" + c("--dual-rx-interval")
+      + ") and re-sends " + c("--dual-rx-cmd") + " (" + c("FR00;") + " = MAIN + SUB receive) if the radio "
+      "reports something else. This overrides manual dual-RX toggles. N1MM radio 1 sends "
+      + c("FR01;") + " (single receive) at every spot jump (bandmap click, Ctrl+Up/Down); VFO-B is then "
+      "silent until the next check, about 0.1 s."),
 
     p("4. All options", H2),
     table([["Option", "Effect"],
@@ -176,7 +178,9 @@ story = [
            [c("--n1mm-udp 12064"), "With --auto-split: follow N1MM TX focus from the RadioInfo broadcast."],
            [c("--n1mm-radio 2"), "Which N1MM radio number vRadio is (default 2)."],
            [c("--dual-rx"), "Keep dual receive on."],
-           [c("--dual-rx-cmd FR00;"), "Command for dual receive (default FR00;, verify on site)."],
+           [c("--dual-rx-cmd FR00;"), "Command for dual receive (default FR00; = MAIN + SUB receive)."],
+           [c("--dual-rx-interval 0.1"), "Seconds between dual RX checks (default 0.1, min 0.03). "
+                                         "Smaller = shorter dropout after a spot jump, more traffic on COM14."],
            [c("--tx-follow"), "At startup set TX to the controlled VFO. Ignored with --auto-split."],
            [c("--usb-data / --lsb-data"), "USB/LSB from the software selects DATA-U/DATA-L (FT8 etc.)."],
            [c("--radio COM14 --radio-baud 38400"), "Radio port and speed (defaults)."],
@@ -226,7 +230,12 @@ story = [
                                                   "radio is on."],
            ["\"Can not set both radios to the same band!\"", "Use --follow-band or the VRAB macro."],
            ["TX on the wrong VFO", "Check N1MM Broadcast Data > Radio > 127.0.0.1:12064 and look for "
-                                   "\"N1MM TX focus\" lines in the log."]],
+                                   "\"N1MM TX focus\" lines in the log."],
+           ["RX2 (VFO-B) silent for a moment after a spot jump", "N1MM radio 1 sends FR01; (single receive). "
+                                   "vRadio switches dual RX back on within dual_rx_interval (0.1 s); "
+                                   "set 0.05 for a shorter gap."],
+           ["N1MM radio 2 connects and disconnects every second", "After a vRadio restart: Configurer > "
+                                   "Hardware > OK in that N1MM."]],
           [55 * mm, 115 * mm]),
     PageBreak(),
     p("9. Two PCs on one FTDX101D (pcs = 2)", H2),

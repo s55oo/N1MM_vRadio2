@@ -10,7 +10,7 @@ FTDX101D ── COM14 38400 8N1 ──> vRadio.exe ── TCP 127.0.0.1:4532 ─
                                     └── UDP 12064 <── N1MM RadioInfo broadcast (TX focus)
 ```
 
-Status 10 Nov 2026: everything confirmed on air except the dual RX value (see "Open items").
+Status 18 Nov 2026 (v1.0.10): everything confirmed on air, including dual RX (`FR00;`).
 
 ## Download
 
@@ -19,6 +19,7 @@ Get the latest exes from **[Releases](https://github.com/s55oo/N1MM_vRadio2/rele
 
 - `vRadio.exe`: console version
 - `vRadioTray.exe`: system tray version
+- `vRadioDJ.exe`: system tray version with the DJ controller (settings in `vradiodj.ini`, see `DJ_CONTROLS.md`)
 - `radio_monitor.exe`: read-only CAT monitor for testing
 
 No installation and no Python needed. Put the exes in one folder (for example `C:\Ham\vRadio\dist`)
@@ -49,7 +50,7 @@ Without the debug log (normal use):
 C:\Ham\vRadio\dist\vRadio.exe --tcp 4532 --follow-band --auto-split --n1mm-udp 12064 --dual-rx --dual-rx-cmd FR00;
 ```
 
-Without dual RX (if FR00; turns out to be wrong):
+Without the dual RX keeper:
 
 ```
 C:\Ham\vRadio\dist\vRadio.exe --tcp 4532 --follow-band --auto-split --n1mm-udp 12064
@@ -250,8 +251,9 @@ Anything else is answered `?;`. Not mapped: KY (CW text), SH/SL (filters), EX (m
 
 ## 8. Open items
 
-- Confirm on site that `FR00;` really means dual RX (both sides receiving). The radio accepts and keeps it.
-  Check: stop vRadio, run `dist\radio_monitor.bat`, toggle dual RX (Ctrl+Alt+D or radio button), read the
-  `FR;` value with dual on, and use it in `--dual-rx-cmd`.
-- Tray version: N1MM radio 2 connected and disconnected repeatedly in one test. Not diagnosed yet;
-  use the console version (`vRadio_TEST.bat`) until then.
+- Dual RX still drops for about 0.1 s at every spot jump on N1MM radio 1: N1MM sends `FR01;` on its
+  own CAT port (COM10), which vRadio can't stop from COM14; it can only switch dual RX back on
+  (`dual_rx_interval`, down to 0.03 s).
+- After vRadio restarts, N1MM radio 2 (also on laptop 2 over the LAN) can keep connecting and
+  disconnecting about once a second (seen 18 Nov 2026). Configurer → Hardware → OK in that N1MM
+  stops it. Cause not found yet.
