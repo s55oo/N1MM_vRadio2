@@ -159,7 +159,7 @@ radio and who really transmits: a `<vRadioShare>` broadcast on PingPong's UDP po
 - Laptop 1: send a CQ. TX stays on VFO-A.
 - Turn the left jog wheel on laptop 1: VFO-B moves and laptop 2's N1MM follows.
 - Ctrl+Up/Down (jump to spot) on laptop 1: N1MM switches dual receive off; vRadio switches it back
-  on within about 0.25 s (`Dual RX: radio reported FR01, sent FR00;`).
+  on within about 0.1 s (`dual_rx_interval`) (`Dual RX: radio reported FR01, sent FR00;`).
 
 ## Limits
 

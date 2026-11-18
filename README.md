@@ -181,7 +181,8 @@ vRadio takes its port exclusively. If another program already has it, the log sa
 | `--n1mm-udp 12064` | With `--auto-split`: follow N1MM's TX focus (`ActiveRadioNr`). Radio 2 focus → `ST1;`, radio 1 focus → `ST0;`. Works with WinKeyer CW too. Never switches during a transmission. While receiving, the TX VFO is checked every 0.15 s and corrected, so split can't stay on while focus is on radio 1 (v1.0.3). |
 | `--split-off-idle` | With `--auto-split` (v1.0.4): split is on **only** during radio 2's own transmission (CAT `TX;` → `ST1;`, `RX;` → `ST0;`) and off after every TX, whatever the focus, so a radio A message can never go out split. Needs N1MM to key radio 2 by CAT (PTT via radio command); otherwise the log warns. **Leave it off (`split_off_idle = no`) when a WinKeyer keys the radio**: then radio 2's CW would go out on VFO-A. |
 | `--n1mm-radio 2` | Which N1MM radio number vRadio is (default 2). |
-| `--dual-rx --dual-rx-cmd FR00;` | Keep dual receive on: 4 times a second read `FR;`, re-send `FR00;` if it changed (N1MM radio 1 switches it off when it jumps to a spot with Ctrl+Up/Down). Overrides manual toggles. |
+| `--dual-rx --dual-rx-cmd FR00;` | Keep dual receive on: 4 times a second read `FR;`, re-send `FR00;` if it changed (N1MM radio 1 switches it off when it jumps to a spot: bandmap click, Ctrl+Up/Down). Overrides manual toggles. |
+| `--dual-rx-interval 0.1` | Seconds between dual RX checks (default 0.1, min 0.03). N1MM radio 1 sends `FR01;` at every spot jump (bandmap click, Ctrl+Up/Down, also in SO1V); VFO-B is silent until the next check. Smaller = shorter dropout, more traffic on COM14. |
 | `--tx-follow` | At startup set TX to the controlled VFO. Ignored with `--auto-split`. |
 | `--usb-data` / `--lsb-data` | USB/LSB from the software selects DATA-U/DATA-L (FT8 etc.). |
 | `--radio COM14 --radio-baud 38400` | Radio port (defaults shown). |
@@ -223,7 +224,10 @@ N1MM macro: `{CAT2ASC VRAB;}` copies VFO-A → VFO-B on a key press.
 cd C:\Ham\vRadio
 "%LOCALAPPDATA%\Programs\Python\Python312\python.exe" -m PyInstaller --onefile --console --icon vradio.ico --name vRadio vradio.py
 "%LOCALAPPDATA%\Programs\Python\Python312\python.exe" -m PyInstaller --onefile --windowed --icon vradio.ico --name vRadioTray vradio.py
+"%LOCALAPPDATA%\Programs\Python\Python312\python.exe" -m PyInstaller --onefile --windowed --icon vradio.ico --add-data "dj_layout_mp3e2.json;." --add-data "dj_mapper.html;." --name vRadioDJ vradio.py
 ```
+vRadioDJ needs both `--add-data` files (DJ layout and mapper page); without them it stops at start
+with `No such file ... dj_layout_mp3e2.json`.
 (Python 3.12, pyserial and PyInstaller are installed for this user.)
 
 ---

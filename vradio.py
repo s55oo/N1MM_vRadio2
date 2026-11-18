@@ -438,10 +438,11 @@ class TS2000Emulator:
                 self.set_focus(int(m.group(1)) == my_radio)
 
     # --- dual receive keeper -------------------------------------------------
-    def dual_rx_loop(self, stop: threading.Event, cmd: str, interval: float = 0.25):
+    def dual_rx_loop(self, stop: threading.Event, cmd: str, interval: float = 0.1):
         """Keep dual receive (MAIN + SUB) switched on: re-send `cmd` whenever the radio drifts off it.
-        Checked 4x a second: N1MM radio 1 (FTDX101D) switches dual RX off when it jumps to a spot
-        (Ctrl+Up/Down), and VFO-B must come back before the operator notices."""
+        Checked every `interval` s (default 0.1, 10x a second): N1MM radio 1 (FTDX101D, also in
+        SO1V) switches dual RX off (FR01) every time it jumps to a spot (bandmap click,
+        Ctrl+Up/Down), and VFO-B goes silent until vRadio switches it back on."""
         want = cmd.rstrip(";")
         while not stop.is_set():
             try:
@@ -1771,6 +1772,10 @@ def main():
                     help="keep dual receive (MAIN + SUB) on all the time")
     ap.add_argument("--dual-rx-cmd", default="FR00;",
                     help="radio command for dual receive (default FR00; - verify on site)")
+    ap.add_argument("--dual-rx-interval", type=float, default=0.1,
+                    help="with --dual-rx: seconds between dual RX checks (default 0.1). N1MM radio 1 "
+                         "switches dual RX off at every spot jump; VFO-B is silent until the next "
+                         "check. Smaller = shorter dropout, more traffic on the radio port (min 0.03)")
     ap.add_argument("--midi", metavar="NAME", default="MP3" if IS_DJ else None,
                     help="DJ controller jog wheel tunes our VFO (radio 2): MIDI input whose name "
                          "contains NAME, e.g. MP3 for Hercules DJ Control MP3 e2")
@@ -1841,6 +1846,7 @@ def main():
         return
 
     a.dual_rx_cmd = a.dual_rx_cmd.strip().upper().rstrip(";") + ";"
+    a.dual_rx_interval = max(0.03, min(5.0, a.dual_rx_interval))
     pcs_changes = apply_pcs(a)
     if str(a.midi or "").strip().lower() in ("no", "off", "none", "0", "false"):
         a.midi = None                                   # "no" switches the DJ wheel off
@@ -2155,9 +2161,10 @@ def _run_core(a, stop: threading.Event, state: dict):
         threading.Thread(target=emu.follow_band_loop, args=(server.stop,), daemon=True).start()
         log.info("Follow-band on: our VFO follows the other VFO's band")
     if a.dual_rx:
-        threading.Thread(target=emu.dual_rx_loop, args=(server.stop, a.dual_rx_cmd),
+        threading.Thread(target=emu.dual_rx_loop,
+                         args=(server.stop, a.dual_rx_cmd, a.dual_rx_interval),
                          daemon=True).start()
-        log.info("Dual RX keeper on (%s)", a.dual_rx_cmd)
+        log.info("Dual RX keeper on (%s, checked every %.2f s)", a.dual_rx_cmd, a.dual_rx_interval)
     if a.auto_split:
         threading.Thread(target=emu.tx_watch_loop, args=(server.stop,), daemon=True).start()
         if getattr(a, "pingpong_port", None):
